@@ -1,8 +1,11 @@
 # Throwaway experiments (AGENTS.md §1) — never referenced by game.lua
 scratch/
 
-# TIC-80 binary cart exports; game.lua is the deliverable
+# TIC-80 binary cart exports; game.lua is the deliverable (pack.py regenerates)
 *.tic
+
+# TIC-80's own config/cache, created by running with --fs=.
+.local/
 
 # Editor / OS cruft
 .DS_Store

@@ -14,14 +14,16 @@ Read this file **and** `MISSION.md` before touching code. `AGENTS.md` says *how*
 | Language | Lua (TIC-80's embedded interpreter) |
 | Deliverable | `game.lua` — a single, runnable TIC-80 cartridge |
 | Genre | Space Invaders clone (see `MISSION.md`) |
-| Repo root | `/home/tic-80/game` |
+| Repo root | `/home/tic-80/stauros-invaders` |
 
 ### Directory layout
 
 ```
 game.lua        the cartridge — the only file TIC-80 loads
+pack.py         packs game.lua into a binary game.tic (see §3; non-PRO console)
 MISSION.md      game design spec + milestone plan
 AGENTS.md       this file
+LINT-RULES.md   lint rules for game.lua and the commands that check them (see §5)
 PROGRESS.md     running log: milestone status, decisions, open questions (see §3)
 docs/           local cache of TIC-80 / Lua reference material (see §4)
 scratch/        throwaway experiments; never referenced by game.lua
@@ -122,20 +124,33 @@ Rules for the file:
 
 ### Running the game
 
-TIC-80 is **not currently installed in this environment**. Before your first run,
-check with `command -v tic80` and report the result rather than guessing.
-
-Once available, the standard loop is:
+TIC-80 1.1.2837 is at `/usr/bin/tic80`. It is **not the PRO build**, and non-PRO builds
+refuse text cartridges — `load game.lua` fails outright. The code must be packed into a
+binary `.tic` first:
 
 ```bash
-tic80 --fs=. --cmd="load game.lua & run"
+python3 pack.py                                        # game.lua -> game.tic
+tic80 --fs=. --cli --skip --cmd="load game.tic & run"  # headless; console output only
+tic80 --fs=. --skip --cmd="load game.tic & run"        # windowed, needs WSLg
 ```
 
-Verify the exact flags for the installed build with `tic80 --help`; CLI flags have
-changed across TIC-80 versions. If the console cannot be launched (no display, not
-installed), fall back to a **syntax check only** — `luac -p game.lua` or
-`lua -e "assert(loadfile('game.lua'))"` — and label the result as *syntax verified,
-behavior unverified*. A syntax check is not a test.
+**Always re-run `pack.py` after editing `game.lua`.** Running a stale `game.tic` shows
+you the previous build and produces bug reports about code you already fixed. This is
+`LINT-RULES.md` L050.
+
+`game.lua` remains the only tracked deliverable; `game.tic` is generated and gitignored.
+`pack.py` exists solely because of the PRO restriction — it is not a build system, and
+§1's prohibition on adding one still stands.
+
+Verify flags against `tic80 --help` for the installed build; they have changed across
+versions. If the console cannot be launched at all, fall back to a **syntax check
+only** — `luac5.4 -p game.lua` — and label the result *syntax verified, behavior
+unverified*. A syntax check is not a test, and `luac5.4` is a version ahead of the
+console's Lua 5.3 (`docs/lua-notes.md`).
+
+Headless `--cli` runs print `trace()` output to stdout, which is enough to confirm a
+cart loads and runs without errors. It is **not** enough for any acceptance criterion
+about what is on screen — for that, capture the window with `grim` and look at it.
 
 ### Debugging
 
@@ -227,9 +242,10 @@ whole milestone on one unknown, and do not paper over the gap with a confident g
 
 ## 5. Code conventions
 
-- **Structure `game.lua` in labeled sections**, in this order, separated by banner
-  comments: metadata header → constants → state → helpers → entity update functions →
-  entity draw functions → collision → game-state machine → `TIC()` → `BOOT()`.
+- **Structure `game.lua` in labeled sections**, in this order: metadata header →
+  constants → state → helpers → entity update functions → entity draw functions →
+  collision → game-state machine → `TIC()` → `BOOT()`. Separate them with a single
+  plain comment line naming the section, lowercase — `-- constants`, nothing more.
 - **`local` by default.** Reach for a global only for the top-level state tables, and
   keep those few and named.
 - **Named constants, not magic numbers.** Screen bounds, speeds, colors, sprite ids,
@@ -238,11 +254,49 @@ whole milestone on one unknown, and do not paper over the gap with a confident g
   tables you can tune, not scattered through logic.
 - **Pure update functions where practical.** `update_x(entity, dt)` mutating one entity
   is fine; a function that touches four unrelated globals is not.
-- **Comment the non-obvious only.** Explain *why* a magic timing value was chosen or
-  why a formula is shaped oddly. Do not narrate what the code plainly says.
 - **No dead code, no commented-out blocks, no speculative abstraction.** Delete it;
   it is recoverable from history.
 - Indent with 2 spaces. Keep lines under 100 characters.
+
+### Comments
+
+`game.lua` is a program, not a notebook. A comment earns its place only by saying
+something the code cannot say for itself.
+
+- **Explain *why*, never *what*.** A comment justifies a choice: why 55 frames, why a
+  formula is shaped oddly, why an edge case exists. If it restates the line below it,
+  delete it.
+- **No narration.** No running commentary ("now we loop over the invaders", "first,
+  clear the screen"), no step numbering, no explanations pitched at someone learning
+  Lua. Nobody is reading over your shoulder.
+- **No decorative characters.** A comment is plain prose after `--`. No `=====`,
+  `-----`, `*****`, `#####`, box-drawing characters, ASCII art, centered or padded
+  text, and no ALL-CAPS titles. A section label is one line: `-- constants`.
+- **No meta-commentary.** Comments never address the user, announce what changed, mark
+  work finished, cite a milestone or session, or carry TODO/FIXME/NOTE/HACK tags.
+  Status lives in `PROGRESS.md`; history lives in git.
+- **Keep them short.** One line where one line does. A comment longer than the code it
+  explains means the code needs the work, not the comment.
+
+### Linting
+
+`LINT-RULES.md` turns this section and §2 into numbered, mostly automated checks. Run
+the full pass before closing a milestone (§6); it is `grep`, `awk`, and `luac5.4`, so it
+costs seconds.
+
+**Improve the rules as you go — this is part of the job, not overhead.** The file is a
+record of mistakes worth not repeating, and it only earns that if it grows:
+
+- When a defect reaches the console that a check could have caught, add the check.
+- When a review catches a style slip, add the rule rather than fixing the one instance.
+- When you find a way to automate a rule currently marked **Read**, automate it and move
+  its command into *Running the pass*.
+- When a rule proves wrong or obsolete, mark it `RETIRED:` with the reason and date.
+  Never delete a rule, never renumber one, never reuse an ID — they are cited elsewhere.
+
+Every added rule carries its *why* and the date and trigger that produced it. A rule
+whose reason is lost gets argued away the first time it is inconvenient. Log notable
+additions in `PROGRESS.md` §3 alongside the decision that prompted them.
 
 ---
 
@@ -252,6 +306,8 @@ A milestone is complete when all of the following hold:
 
 - [ ] `game.lua` loads in TIC-80 with no console errors.
 - [ ] The milestone's acceptance criteria in `MISSION.md` are observably met.
+- [ ] The `LINT-RULES.md` pass runs clean, and any rule the milestone taught you is
+      written down (§5 *Linting*).
 - [ ] Every new TIC-80 API call used is recorded in `docs/tic80-api.md`.
 - [ ] No debug `trace()` calls fire during normal play.
 - [ ] Frame rate holds at 60 with the milestone's worst-case entity count on screen.
