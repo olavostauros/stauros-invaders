@@ -1,0 +1,11 @@
+# Throwaway experiments (AGENTS.md §1) — never referenced by game.lua
+scratch/
+
+# TIC-80 binary cart exports; game.lua is the deliverable
+*.tic
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+.vscode/
+.idea/
