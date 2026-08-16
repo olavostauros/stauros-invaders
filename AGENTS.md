@@ -21,6 +21,7 @@ Read this file **and** `MISSION.md` before touching code. `AGENTS.md` says *how*
 ```
 game.lua        the cartridge — the only file TIC-80 loads
 pack.py         packs game.lua into a binary game.tic (see §3; non-PRO console)
+README.md       required tooling and how to build, run, and screenshot the cart
 MISSION.md      game design spec + milestone plan
 AGENTS.md       this file
 LINT-RULES.md   lint rules for game.lua and the commands that check them (see §5)
