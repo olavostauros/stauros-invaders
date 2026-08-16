@@ -22,7 +22,7 @@ Read this file **and** `MISSION.md` before touching code. `AGENTS.md` says *how*
 game.lua        the cartridge — the only file TIC-80 loads
 MISSION.md      game design spec + milestone plan
 AGENTS.md       this file
-PROGRESS.md     running log: milestone status, decisions, known bugs
+PROGRESS.md     running log: milestone status, decisions, open questions (see §3)
 docs/           local cache of TIC-80 / Lua reference material (see §4)
 scratch/        throwaway experiments; never referenced by game.lua
 ```
@@ -79,7 +79,7 @@ does not run.
 1. **Read `MISSION.md`, then `PROGRESS.md`.** Pick up at the first incomplete milestone.
    Do not skip ahead; each milestone leaves the game in a runnable state.
 2. **One milestone per working session.** Implement it fully, verify it runs, update
-   `PROGRESS.md`, then stop and report.
+   `PROGRESS.md` per *Keeping `PROGRESS.md` current* below, then stop and report.
 3. **Keep `game.lua` runnable at all times.** Never commit or hand back a cartridge
    that errors on load. A half-implemented feature behind a flag is acceptable;
    a syntax error is not.
@@ -88,6 +88,37 @@ does not run.
    describe untested code as working.
 5. **Report honestly.** If a milestone is partly blocked, finish everything that is
    not blocked, then state plainly what is missing and why.
+
+### Keeping `PROGRESS.md` current
+
+`PROGRESS.md` is the authoritative record of where the project stands. The code says
+what the game does; `PROGRESS.md` says what is finished, what was decided and why, and
+what is still unknown. A session that changes the project without updating it has left
+the next agent to re-derive all of that from a diff.
+
+It has six sections. Write to the right one:
+
+| Section | Holds | Write when |
+|---|---|---|
+| 1. Milestone status | The M0–M8 table and a one-line "current position" | A milestone starts, finishes, or blocks |
+| 2. Environment | Verified tool versions, the run loop, display/audio state | A tool is installed, upgraded, or found broken |
+| 3. Decisions | Newest-first log of choices **and their rationale** | A judgment call is made that a later agent could otherwise second-guess |
+| 4. API documentation status | Which TIC-80 functions are verified in `docs/`, and the console's Lua version | New signatures are recorded per §4.1 |
+| 5. Known bugs | Reproducible defects not yet fixed | A bug is found — including one you caused and chose not to fix yet |
+| 6. OPEN QUESTIONS | Unresolved unknowns and the assumption used to work around each | Per §4.5, whenever you proceed on an assumption |
+
+Rules for the file:
+
+- **Update it as you go, not only at milestone end.** Decisions and open questions are
+  written when they happen; a decision reconstructed hours later loses its reasoning.
+- **A milestone is `DONE` only when it was observed running in the console** (rule 4
+  above, and §6). Untested code is `IN PROGRESS`, never `DONE`. If you could not run TIC-80, say
+  so in the milestone's Notes column rather than upgrading its status.
+- **Never delete an answered open question.** Mark it `RESOLVED:` with the answer and
+  its source, per §4.5. The record of what was once uncertain has value.
+- **Dates are absolute** (`2026-08-16`), never "today" or "last session".
+- Keep entries short. This is a log, not a design document — reasoning that belongs in
+  the spec goes to `MISSION.md`, and API facts go to `docs/`.
 
 ### Running the game
 
@@ -189,7 +220,7 @@ check `docs/` first — a verified local note beats a re-fetch.
 
 If you cannot verify something and cannot proceed without it, write down the specific
 question, implement the rest of the milestone around it under a clearly stated
-assumption, and flag it in `PROGRESS.md` under `OPEN QUESTIONS`. Do not stall the
+assumption, and flag it in `PROGRESS.md` under `OPEN QUESTIONS` (§3). Do not stall the
 whole milestone on one unknown, and do not paper over the gap with a confident guess.
 
 ---
@@ -224,7 +255,8 @@ A milestone is complete when all of the following hold:
 - [ ] Every new TIC-80 API call used is recorded in `docs/tic80-api.md`.
 - [ ] No debug `trace()` calls fire during normal play.
 - [ ] Frame rate holds at 60 with the milestone's worst-case entity count on screen.
-- [ ] `PROGRESS.md` updated: what shipped, what was decided, what is still open.
+- [ ] `PROGRESS.md` updated per §3: milestone status moved to `DONE`, any decisions
+      and their rationale logged, open questions carried forward or marked `RESOLVED:`.
 
 ---
 
@@ -234,4 +266,5 @@ Build what `MISSION.md` specifies. Do not add menus, shaders, particle systems,
 alternate game modes, or engine abstractions that the spec does not call for.
 
 If you believe the spec is wrong, say so in one or two sentences, then implement it
-as written and note the concern in `PROGRESS.md`. Scope changes are the user's call.
+as written and note the concern in `PROGRESS.md` under Decisions (§3). Scope changes
+are the user's call.

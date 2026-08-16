@@ -3,9 +3,10 @@
 Running log for the TIC-80 Space Invaders cartridge. Read `MISSION.md` for what to
 build and `AGENTS.md` for how to work; this file records where things actually stand.
 
-**Update rule:** every milestone ends with an edit here — what shipped, what was
-decided, what is still open (`AGENTS.md` §6). Do not mark a milestone done without
-having loaded the cart and observed the behavior (`AGENTS.md` §3.4).
+**Update rule:** `AGENTS.md` §3 *Keeping `PROGRESS.md` current* governs this file —
+which section takes what, and when to write to it. Update as you go, not only at
+milestone end. Do not mark a milestone `DONE` without having loaded the cart and
+observed the behavior (`AGENTS.md` §3 rule 4, and §6).
 
 ---
 
@@ -60,6 +61,12 @@ luac5.4 -p game.lua
 
 Newest first. Record the *why*, not just the *what*.
 
+- **2026-08-16 — Added `AGENTS.md` §3 *Keeping `PROGRESS.md` current* to govern this
+  file.** `AGENTS.md` referenced `PROGRESS.md` in six places but never defined its
+  structure or when to write to it, so "keep it updated" was unenforceable and the six
+  section names here were undocumented. That subsection now maps each section to its
+  write trigger and states the `DONE`-means-observed and never-delete-a-resolved-question
+  rules. Keep the section list here and the table there in sync if either changes.
 - **2026-08-16 — Installed TIC-80 from the prebuilt v1.1 `.deb` rather than building
   from source.** There is no `tic80` package in the Ubuntu archive. The release binary
   statically links SDL2 and `ldd` showed no missing libraries, so it runs as-is;
