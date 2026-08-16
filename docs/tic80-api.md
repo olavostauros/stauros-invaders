@@ -75,7 +75,59 @@ near-invisible against the default black `cls()`. Always pass a color explicitly
 
 ---
 
+## Memory
+
+### `peek4`
+
+Read 2026-08-16 from https://github.com/nesbox/TIC-80/wiki/peek
+(the `peek4` page now redirects there)
+
+```lua
+peek4(addr4) -> val4
+```
+
+- `addr4` — **nibble** address, not a byte address. Returns 0..15.
+
+The scaling is the trap: nibble address = byte address × 2, least-significant nibble
+first. The wiki's own example is that byte `0x4000` is nibbles `0x8000` (low) and
+`0x8001` (high). `peek`, `peek2`, and `peek1` are the same idea at 8-, 2-, and 1-bit
+granularity, each with its own address scale.
+
+Used by `tools/screendump.py` to read the framebuffer; see `docs/tic80-ram.md`.
+
+---
+
 ## System
+
+### `exit`
+
+Read 2026-08-16 from https://github.com/nesbox/TIC-80/wiki/exit
+
+```lua
+exit()
+```
+
+No parameters, no return value. Returns to the TIC-80 console.
+
+**Two gotchas.** It does not return immediately — execution stops only *after* the
+current `TIC()` finishes, so every line after the `exit()` call still runs. And it
+returns to the console rather than quitting the process, so a script driving `tic80`
+must kill it; waiting for the process to end will hang.
+
+### `time`
+
+Read 2026-08-16 from https://github.com/nesbox/TIC-80/wiki/time
+
+```lua
+time() -> ms
+```
+
+No parameters. Returns milliseconds elapsed since the cartridge began execution — the
+zero point is cart start, not console start.
+
+Measured against the host wall clock 2026-08-16 via `tools/fpscheck.py`: 900 frames of
+`time()` and 15.00 s of host time agree to within 0.02 FPS, so it tracks real time and
+is not derived from the frame counter.
 
 ### `trace`
 

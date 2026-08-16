@@ -27,7 +27,8 @@ AGENTS.md       this file
 LINT-RULES.md   lint rules for game.lua and the commands that check them (see §5)
 PROGRESS.md     running log: milestone status, decisions, open questions (see §3)
 docs/           local cache of TIC-80 / Lua reference material (see §4)
-scratch/        throwaway experiments; never referenced by game.lua
+tools/          verification harness — reads the framebuffer and the frame rate (see §6)
+scratch/        throwaway experiments and generated intermediates; never referenced by game.lua
 ```
 
 Do not create build systems, package manifests, transpilers, or `src/` module trees
@@ -151,7 +152,24 @@ console's Lua 5.3 (`docs/lua-notes.md`).
 
 Headless `--cli` runs print `trace()` output to stdout, which is enough to confirm a
 cart loads and runs without errors. It is **not** enough for any acceptance criterion
-about what is on screen — for that, capture the window with `grim` and look at it.
+about what is on screen, and not enough for frame rate either.
+
+### Verifying what is on screen
+
+No screenshot tool works here — `grim` needs a wlroots compositor and WSLg is not one,
+no X11 capture tool is installed, and `sudo` needs a password an agent does not have.
+Read the framebuffer out of RAM instead. Both tools append a probe to a *copy* of
+`game.lua` and wrap the cart's own `TIC()`, so the code under test runs exactly as
+committed (`LINT-RULES.md` L053):
+
+```bash
+python3 tools/screendump.py    # every pixel via peek4: histogram, bounding box, ASCII
+python3 tools/fpscheck.py      # frame rate, windowed, cross-checked against the host clock
+```
+
+Never conclude "it renders" from a clean headless run — `print` with a defaulted color
+draws invisibly and errors nothing (`LINT-RULES.md` L008, L051). Never measure frame rate
+under `--cli`; it is unthrottled and the number is meaningless (L052).
 
 ### Debugging
 
@@ -306,12 +324,14 @@ additions in `PROGRESS.md` §3 alongside the decision that prompted them.
 A milestone is complete when all of the following hold:
 
 - [ ] `game.lua` loads in TIC-80 with no console errors.
-- [ ] The milestone's acceptance criteria in `MISSION.md` are observably met.
+- [ ] The milestone's acceptance criteria in `MISSION.md` are observably met — for
+      anything visual, observed with `tools/screendump.py`, not inferred from a clean run.
 - [ ] The `LINT-RULES.md` pass runs clean, and any rule the milestone taught you is
       written down (§5 *Linting*).
 - [ ] Every new TIC-80 API call used is recorded in `docs/tic80-api.md`.
 - [ ] No debug `trace()` calls fire during normal play.
-- [ ] Frame rate holds at 60 with the milestone's worst-case entity count on screen.
+- [ ] Frame rate holds at 60 with the milestone's worst-case entity count on screen,
+      measured windowed with `tools/fpscheck.py`.
 - [ ] `PROGRESS.md` updated per §3: milestone status moved to `DONE`, any decisions
       and their rationale logged, open questions carried forward or marked `RESOLVED:`.
 

@@ -16,7 +16,7 @@ Legend: `TODO` · `IN PROGRESS` · `DONE` (verified in-console) · `BLOCKED`
 
 | # | Milestone | Status | Notes |
 |---|---|---|---|
-| M0 | Skeleton — metadata header, `TIC()`, `cls()`, "HELLO", scaffolding | IN PROGRESS | Cart written, lint-clean, loads and runs headless with no errors. Not `DONE`: the screen has not been *seen*. See §6. |
+| M0 | Skeleton — metadata header, `TIC()`, `cls()`, "HELLO", scaffolding | DONE | Verified 2026-08-16: "HELLO" observed on screen via `tools/screendump.py` — 76 px of color 12 at x 105..133, y 64..68, rest of the screen color 0. 60.01 FPS on the host clock. Lint pass clean. |
 | M1 | Player — movement, edge clamp, single bullet | TODO | |
 | M2 | Fleet — 5 × 11 grid, stepped march, drop-and-reverse, waddle | TODO | |
 | M3 | Combat — bullet kills, scoring, speed-up curve | TODO | |
@@ -26,9 +26,10 @@ Legend: `TODO` · `IN PROGRESS` · `DONE` (verified in-console) · `BLOCKED`
 | M7 | Shell — title, game over, wave transitions, HUD, `pmem`, extra life | TODO | |
 | M8 | Audio and polish — SFX, fleet loop, explosions, perf pass | TODO | |
 
-**Current position:** M0 code complete and running. Blocked on one workflow decision —
-this TIC-80 build cannot load `.lua` text carts (§2), so how carts get run needs
-settling before M1.
+**Current position:** M0 complete and verified in-console. Nothing is blocked; M1
+(player movement and the single bullet) is next. Both remaining workflow gaps closed
+this session — carts are packed with `pack.py`, and visual and frame-rate acceptance are
+now checked by `tools/screendump.py` and `tools/fpscheck.py` rather than assumed.
 
 ---
 
@@ -52,7 +53,7 @@ Verified 2026-08-16, second pass:
 | Console Lua | **Lua 5.3**, from `trace(_VERSION)` in-console. Not the host `lua5.4`. See `docs/lua-notes.md` |
 | Headless run | `--cli` works and prints console output to stdout, including `trace()`. Enough to verify load and runtime errors without a window |
 | `lua5.3` host binary | not installed; available in the archive as `5.3.6-3` |
-| Screenshot tooling | `grim` installed 2026-08-16 but **does not work here** — it fails with "compositor doesn't support wlr-screencopy-unstable-v1". WSLg's compositor is not wlroots-based, so no Wayland screenshot tool will work. Capture must go through XWayland (`DISPLAY=:0`) with an X11 tool instead — `import -window` from `imagemagick`, since rootless XWayland has no useful root window to grab |
+| Screenshot tooling | **None exists and none is needed.** `grim` fails ("compositor doesn't support wlr-screencopy-unstable-v1" — WSLg is not wlroots-based, so no Wayland tool will work), and no X11 tool is installed: `import`, `convert`, `xwd`, `ffmpeg`, `scrot`, `maim`, `xdotool` are all absent, as are Python `mss` and `PIL`. `sudo` needs a password, so an agent cannot install one. Superseded by reading VRAM directly — see below |
 
 The documented run loop **does not work on this build**:
 
@@ -72,7 +73,17 @@ tic80 --fs=. --cli --skip --cmd="load game.tic & run"
 ```
 
 Confirmed working 2026-08-16 — printed `cart game.tic loaded!` and ran `BOOT()`. This
-is a stopgap pending the §6 decision, not an endorsed workflow. `.tic` is gitignored.
+is the endorsed workflow as of the 2026-08-16 `pack.py` decision (§3). `.tic` is
+gitignored.
+
+Verified 2026-08-16, third pass — the verification harness in `tools/`:
+
+| Check | State |
+|---|---|
+| Framebuffer readout | `python3 tools/screendump.py` works. VRAM is byte `0x00000`, 240 × 136 4-bit pixels, so `peek4(y * 240 + x)` is a pixel (`docs/tic80-ram.md`). Prints a palette histogram, bounding box, and the occupied region as ASCII |
+| Frame rate | `python3 tools/fpscheck.py` works. **60.01 FPS** on the host wall clock, 60.00 by the console's `time()` |
+| `trace()` under `--cli` | Output arrives with **no line break between calls** — a multi-line dump comes back as one flat stream, so parse by fixed width, not by lines |
+| `exit()` | Returns to the TIC-80 console; it does **not** quit the process. A driving script must kill it, or it hangs until timeout |
 
 Syntax-only fallback, which is **not** a test — label results *syntax verified,
 behavior unverified* (`AGENTS.md` §3). Note it checks 5.4 against a 5.3 console:
@@ -87,6 +98,26 @@ luac5.4 -p game.lua
 
 Newest first. Record the *why*, not just the *what*.
 
+- **2026-08-16 — Verify visual acceptance by reading VRAM, not by screenshotting.**
+  M0's acceptance is "text visible" and no capture tool works here (§2), which had left
+  the milestone stuck a session. TIC-80's framebuffer is just RAM, so `tools/screendump.py`
+  appends a probe to a copy of `game.lua`, wraps the cart's own `TIC()`, and dumps every
+  pixel through `peek4`. It is *better* than a screenshot for this job — it reports exact
+  coordinates and palette indices, which is what catches text drawn in an invisible
+  color, and it runs headless in seconds. Recorded as `LINT-RULES.md` L051.
+- **2026-08-16 — `tools/` is tracked, not part of gitignored `scratch/`.** The harness
+  was written in `scratch/`, which would have thrown it away and made the next agent
+  re-derive it — and every milestone M1–M8 has visual acceptance criteria that need it.
+  It is scaffolding on the same footing as `pack.py`, so `AGENTS.md` §1's ban on build
+  systems still stands; `scratch/` keeps the generated `.lua`/`.tic` intermediates.
+- **2026-08-16 — Frame rate is measured windowed and cross-checked against the host
+  clock.** Two traps, both of which would have produced a confident wrong answer.
+  `--cli` is unthrottled, so its frame rate reflects host CPU, not console pacing. And
+  the console's `time()` would be circular if TIC-80 derived it from the frame counter,
+  which "60 FPS over 600 frames" could never detect. `tools/fpscheck.py` therefore runs
+  windowed and takes a differential of two sample lengths against the host wall clock —
+  differential because `exit()` does not end the process and startup adds an unknown
+  constant, both of which cancel. The two clocks agree to 0.02 FPS. `LINT-RULES.md` L052.
 - **2026-08-16 — Keep a `.lua`→`.tic` packer (`pack.py`) rather than building PRO from
   source.** User's call, given the console rejects text carts (§2). The TIC-80 README
   does sanction `cmake .. -DBUILD_PRO=On`, but that pulls the whole toolchain the
@@ -153,8 +184,16 @@ recorded in `docs/tic80-api.md` **before its first use**.
 - `docs/lua-notes.md` — created 2026-08-16. Console reports **Lua 5.3**; 5.4-only forms
   (`<close>`, `<const>`, `warn`, `coroutine.close`) will not load, and host `luac5.4`
   will not catch them because it is a superset.
-- `docs/tic80-ram.md` — not created. Nothing pokes RAM yet (`AGENTS.md` §4.4 records
-  only what is used).
+- `docs/tic80-ram.md` — created 2026-08-16, when the harness started reading VRAM.
+  Records the screen region only: byte `0x00000`, 240 × 136 4-bit pixels, two per byte
+  low-nibble-first, so `peek4(y * 240 + x)` is a pixel. Notes that `vbank(1)` would
+  switch banks under anything reading VRAM, and that `pmem`'s region at `0x14004` gets
+  documented when M7 needs it, not before.
+- `peek4`, `exit`, and `time` added to `docs/tic80-api.md` 2026-08-16. They are used by
+  `tools/`, not by `game.lua`, but `AGENTS.md` §4.1 is about the project and each has a
+  gotcha worth having written down: `peek4` addresses by *nibble*, not byte; `exit()`
+  runs the rest of the current `TIC()` and returns to the console instead of quitting;
+  `time()` is wall-clock from cart start, confirmed against the host clock.
 - Two `print` gotchas recorded: its default color 15 is dark navy and invisible on the
   black the game clears to, and it returns the drawn width, which is how text gets
   centered.
@@ -173,13 +212,16 @@ Per `AGENTS.md` §4.5: state the question, implement around it under a clearly s
 assumption, and record the assumption here. Mark answered ones `RESOLVED:` with the
 answer and its source; do not delete them.
 
-- **Does "HELLO" actually render?** M0's acceptance is visual, and no screenshot tool
-  exists in this environment (§2), so no agent has seen the screen. The cart is
-  confirmed to load and run without error headlessly, which is strictly less than the
-  acceptance criterion. **Assumption:** it draws as written; M0 stays `IN PROGRESS`
-  until the screen is captured. `grim` was installed for this and turned out not to work
-  on WSLg (§2); an X11 tool is needed instead. Note `sudo` requires a password here, so
-  an agent cannot install packages unattended — ask the user.
+- **RESOLVED: Does "HELLO" actually render?** **Yes.** Source: `tools/screendump.py`,
+  run 2026-08-16, reading the framebuffer through `peek4`. The screen is 32,564 px of
+  color 0 and 76 px of color 12, forming legible "HELLO" glyphs in a bounding box of
+  x 105..133, y 64..68 — margins 105 left and 106 right, the one-pixel asymmetry being
+  the expected `math.floor` in `print_centered`. The answer turned out not to need a
+  screenshot tool at all (§3), so the sub-question of which one to install is moot.
+- **RESOLVED: Does the cart hold 60 FPS?** **Yes — 60.01 FPS**, host wall clock, via
+  `tools/fpscheck.py` on 2026-08-16. This was never written down as an open question but
+  was just as unverified as the one above: M0's acceptance criterion says "60 FPS" and
+  nothing had measured it.
 - **RESOLVED: How should text carts be run, given this build is not PRO?** With
   `pack.py`, per the user's decision on 2026-08-16 (§3). Building PRO from source
   (`cmake .. -DBUILD_PRO=On`, sanctioned by the TIC-80 README) and buying PRO were the

@@ -36,8 +36,9 @@ Verified 2026-08-16 on Ubuntu 26.04 LTS (x86_64) under WSL2, kernel
 | Tool | Version here | Purpose |
 |---|---|---|
 | `luac5.4` | Lua 5.4.8 | Fast syntax check without launching the console |
-| `imagemagick` | `8:7.1.2.18` | Screenshots, for verifying anything visual |
-| `x11-utils` | `7.7+7build1` | `xwininfo`, to locate the TIC-80 window for capture |
+
+Nothing is needed for screenshots — see *Seeing the screen* below. A working WSLg
+display is needed only for the frame-rate check, which must run windowed.
 
 ### Installing TIC-80
 
@@ -51,7 +52,7 @@ Building from source is not necessary at this version — see the rationale in
 ### Installing the rest
 
 ```bash
-sudo apt-get install -y python3 lua5.4 imagemagick x11-utils
+sudo apt-get install -y python3 lua5.4
 ```
 
 ---
@@ -110,20 +111,54 @@ a stale `game.tic` silently shows you the previous build. This is checked as
 A headless run proves the cart loads and does not error. It proves nothing about what is
 on screen — see below.
 
-### Screenshots under WSLg
+### Seeing the screen, without a screenshot tool
 
-`grim` does **not** work here. WSLg's compositor is not wlroots-based, so it fails with
-`compositor doesn't support wlr-screencopy-unstable-v1`, and no Wayland screenshot tool
-will do better. Capture through XWayland (`DISPLAY=:0`) instead. Rootless XWayland has
-no useful root window, so grab the window by name:
+No screenshot tool works in this environment. `grim` fails because WSLg's compositor is
+not wlroots-based (`compositor doesn't support wlr-screencopy-unstable-v1`), and no
+Wayland tool will do better; no X11 capture tool is installed, and installing one needs
+a sudo password, so an agent cannot do it unattended.
+
+None is needed. TIC-80's framebuffer is just RAM — VRAM starts at byte 0 and the screen
+is 240 × 136 4-bit pixels — so the console can be asked what it drew:
 
 ```bash
-xwininfo -root -tree | grep -i tic       # find the window id
-import -window <id> shot.png
+python3 tools/screendump.py
 ```
 
-The `grim` failure is confirmed; this X11 replacement is the documented approach but has
-not yet been exercised here, because `imagemagick` is not installed as of 2026-08-16.
+That appends `tools/vram-probe.lua` to a copy of `game.lua`, wrapping the cart's own
+`TIC()` so the code under test runs unmodified, dumps every pixel through `peek4()`, and
+prints a palette histogram, the bounding box of everything non-black, and the occupied
+region as ASCII. For the M0 cart:
+
+```
+palette histogram (. is index 0):
+  .:  32564 px (99.77%)
+  c:     76 px ( 0.23%)
+
+non-black bounding box: x 105..133 (29 px), y 64..68 (5 px)
+margins: left 105, right 106, top 64, bottom 67
+
+ 64 |  ##  # ##### ##    ##     ###
+ 65 |  ##  # ##    ##    ##    ##  #
+ 66 |  ##### ####  ##    ##    ##  #
+ 67 |  ##  # ##    ##    ##    ##  #
+ 68 |  ##  # ##### ##### #####  ###
+```
+
+This is better than a screenshot for the checks that matter: it gives exact pixel
+coordinates and palette indices, which is what catches text drawn in an invisible color
+or off by a pixel. It is `LINT-RULES.md` L051.
+
+### Checking the frame rate
+
+```bash
+python3 tools/fpscheck.py
+```
+
+Runs windowed, because `--cli` is unthrottled and its frame rate means nothing. It
+cross-checks the console's `time()` against the host wall clock, since `time()` alone
+would be circular if TIC-80 derived it from the frame counter — it does not. This is
+`LINT-RULES.md` L052.
 
 ## Linting
 
@@ -149,8 +184,9 @@ MISSION.md      game design spec + milestone plan
 AGENTS.md       operating rules for working in this repo
 LINT-RULES.md   lint rules and their check commands
 PROGRESS.md     running log: milestone status, decisions, open questions
-docs/           cached TIC-80 API signatures and Lua notes
-scratch/        throwaway experiments; never referenced by game.lua (gitignored)
+docs/           cached TIC-80 API signatures, RAM map, and Lua notes
+tools/          verification harness: screendump.py, fpscheck.py, and their probes
+scratch/        throwaway experiments and generated intermediates (gitignored)
 ```
 
 Do not add build systems, package manifests, or `src/` module trees. TIC-80 loads

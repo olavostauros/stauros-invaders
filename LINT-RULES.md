@@ -34,6 +34,15 @@ grep -n 'DEBUG *= *true' game.lua                                             # 
 Each command should print nothing, except the `_ENV` one — that prints the global list,
 which you read against L010's allowlist.
 
+Closing a milestone additionally needs the two checks that require running the cart.
+They take seconds and half a minute respectively, so they are milestone-close rather
+than every-edit:
+
+```bash
+python3 tools/screendump.py    # L051 - what is actually on screen
+python3 tools/fpscheck.py      # L052 - frame rate, windowed
+```
+
 ---
 
 ## Correctness rules
@@ -113,7 +122,12 @@ calls (`TIC`, `BOOT`), a documented TIC-80 API function, a Lua stdlib table (`ma
 accidental global from a missing `local` — which in TIC-80 persists across frames and
 produces bugs that look like corruption. `AGENTS.md` §2, §5. **Automated + read.**
 
-Current allowlist: `TIC`, `BOOT`, `game`, `math`, plus documented API calls.
+Current allowlist: `TIC`, `BOOT`, `game`, `math`, `_VERSION`, plus documented API calls.
+
+*Amended 2026-08-16: `_VERSION` added. It is a read-only Lua stdlib global, not an
+accidental one, and it appears in the `_ENV` output because `BOOT()` traces it under
+`DEBUG`. Lua stdlib tables and globals belong on this list; TIC-80 calls still have to
+earn their place through L006.*
 
 ### L011 — the global list is the API inventory
 The same `_ENV` output is the authoritative list of which TIC-80 functions the cart
@@ -195,6 +209,52 @@ watching the previous build — and the bug you "reproduce" is one you already f
 
 *Added 2026-08-16, when the packing step was introduced. The failure is silent by
 construction, which is exactly why it needs a check rather than discipline.*
+
+### L051 — visual acceptance is read off the framebuffer, never assumed
+A milestone whose acceptance criterion in `MISSION.md` describes what is *on screen*
+does not close on a clean headless run. A headless run proves the cart loaded and did
+not throw; it says nothing about whether anything was drawn, in a visible color, in the
+right place. `print` defaulting to an invisible color (L008) is exactly the failure that
+passes a headless run and fails the criterion.
+
+```bash
+python3 tools/screendump.py       # prints the palette histogram, bounding box, and ASCII
+```
+
+**Automated, then read** — the tool renders the pixels; judging whether they match the
+criterion is yours.
+
+*Added 2026-08-16. M0 sat `IN PROGRESS` for a session because "text visible" had not
+been observed and no screenshot tool works here — `grim` needs a wlroots compositor and
+WSLg is not one. Reading VRAM through `peek4` from inside the console removed the
+blocker entirely, and made the check cheaper than a screenshot would have been.*
+
+### L052 — measure frame rate windowed, never under `--cli`
+`AGENTS.md` §6 requires 60 FPS at the milestone's worst-case entity count. Measure it
+with the console windowed:
+
+```bash
+python3 tools/fpscheck.py
+```
+
+`--cli` has no vsync and no frame limiter, so it runs as fast as the host CPU allows and
+reports a number that is unrelated to the console's pacing — flattering nonsense early
+on, and it would keep flattering right up until real frames started dropping.
+
+*Added 2026-08-16, when M0's 60 FPS criterion was first actually measured. The tool
+cross-checks the console's `time()` against the host wall clock, because `time()` alone
+would be circular if TIC-80 derived it from the frame counter. It does not
+(`docs/tic80-api.md`), and that is now a recorded fact rather than an assumption.*
+
+### L053 — verification probes append to `game.lua`, never edit it
+The harness in `tools/` concatenates a probe onto a copy of `game.lua` and wraps the
+cart's own `TIC()`. Nothing in `tools/` may require an edit to `game.lua` — no probe
+hooks, no instrumentation flags, no "just add a counter here". **Read.**
+
+*Added 2026-08-16. Instrumentation that lives in the deliverable is instrumentation that
+ships: it survives the milestone, drifts out of sync, and turns into the dead code L015
+forbids. Wrapping the global `TIC` gets the same measurement with the code under test
+running byte-for-byte as committed.*
 
 ---
 
