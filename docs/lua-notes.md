@@ -52,7 +52,10 @@ installing it would make the check match the target. Tracked as `LINT-RULES.md` 
 
 ## Standard library availability
 
-Confirmed present: `math` (via `math.floor`), `_VERSION`.
+Confirmed present: `math` (via `math.floor`), `_VERSION`, `ipairs`, `tostring`, and the
+`string` and `table` tables — `string.format`, `string.sub` including the `s:sub()`
+method form, and `table.concat` all run in-console (2026-08-16, `game.lua` and
+`tools/`).
 
 Everything else is **unverified**. `AGENTS.md` §2 says to assume `require`, `io.*`,
 `os.execute`, file access, and `package` are unavailable until proven otherwise, and

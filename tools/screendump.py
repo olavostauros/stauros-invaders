@@ -11,12 +11,18 @@ unmodified - and dumps the framebuffer through peek4() after the second frame. V
 starts at byte 0 and the screen is 240x136 4-bit pixels, so pixel (x, y) is nibble
 y * 240 + x (docs/tic80-ram.md).
 
+A frame can be dumped mid-action rather than at rest: --hold writes a gamepad mask to
+RAM every frame (see tools/inputsim.py for what that does and does not simulate), and
+--frames picks how many frames run before the dump.
+
 Usage:
-    python3 tools/screendump.py            # render the occupied region as ASCII
-    python3 tools/screendump.py --raw out  # also write the nibble grid to a file
+    python3 tools/screendump.py                       # render the occupied region
+    python3 tools/screendump.py --raw out             # also write the nibble grid
+    python3 tools/screendump.py --hold 16 --frames 20 # dump frame 20 with A held
 """
 
 import os
+import re
 import subprocess
 import sys
 import time
@@ -26,13 +32,20 @@ W, H = 240, 136
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def capture():
+def arg(name, default):
+    return int(sys.argv[sys.argv.index(name) + 1]) if name in sys.argv else default
+
+
+def capture(hold, frames):
     """Run the probe cart headlessly and return the raw console output."""
     os.makedirs(os.path.join(ROOT, "scratch"), exist_ok=True)
+    probe = open(os.path.join(ROOT, "tools", "vram-probe.lua"), encoding="utf-8").read()
+    probe = re.sub(r"local PROBE_HOLD = \d+", f"local PROBE_HOLD = {hold}", probe)
+    probe = re.sub(r"local PROBE_WARMUP = \d+", f"local PROBE_WARMUP = {frames}", probe)
     src = os.path.join(ROOT, "scratch", "probe.lua")
     with open(src, "w", encoding="utf-8") as f:
         f.write(open(os.path.join(ROOT, "game.lua"), encoding="utf-8").read())
-        f.write(open(os.path.join(ROOT, "tools", "vram-probe.lua"), encoding="utf-8").read())
+        f.write(probe)
     subprocess.run([sys.executable, "pack.py", "scratch/probe.lua", "scratch/probe.tic"],
                    cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
 
@@ -93,7 +106,9 @@ def report(rows):
 
 
 def main():
-    rows = parse(capture())
+    hold, frames = arg("--hold", 0), arg("--frames", 2)
+    print(f"gamepad mask {hold} held, dumping frame {frames}\n")
+    rows = parse(capture(hold, frames))
     if "--raw" in sys.argv:
         path = sys.argv[sys.argv.index("--raw") + 1]
         with open(path, "w", encoding="utf-8") as f:

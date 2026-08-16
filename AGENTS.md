@@ -165,11 +165,21 @@ committed (`LINT-RULES.md` L053):
 ```bash
 python3 tools/screendump.py    # every pixel via peek4: histogram, bounding box, ASCII
 python3 tools/fpscheck.py      # frame rate, windowed, cross-checked against the host clock
+python3 tools/inputsim.py      # scripted gamepad input, checked against the game's state
 ```
 
 Never conclude "it renders" from a clean headless run — `print` with a defaulted color
 draws invisibly and errors nothing (`LINT-RULES.md` L008, L051). Never measure frame rate
 under `--cli`; it is unthrottled and the number is meaningless (L052).
+
+### Verifying what the game does
+
+No key can be pressed here, so the gamepad is written straight to RAM at `0x0FF80` and
+the game's own state is read back per frame. Every milestone's acceptance criteria are
+about behavior under input; each gets a scenario in `tools/inputsim.py` (`LINT-RULES.md`
+L054). Note that `btnp` cannot be simulated this way and the probe substitutes its own —
+the limitation is documented in `docs/tic80-api.md` and must be restated, not forgotten,
+whenever a press-versus-hold criterion is closed.
 
 ### Debugging
 

@@ -17,7 +17,7 @@ Legend: `TODO` · `IN PROGRESS` · `DONE` (verified in-console) · `BLOCKED`
 | # | Milestone | Status | Notes |
 |---|---|---|---|
 | M0 | Skeleton — metadata header, `TIC()`, `cls()`, "HELLO", scaffolding | DONE | Verified 2026-08-16: "HELLO" observed on screen via `tools/screendump.py` — 76 px of color 12 at x 105..133, y 64..68, rest of the screen color 0. 60.01 FPS on the host clock. Lint pass clean. |
-| M1 | Player — movement, edge clamp, single bullet | TODO | |
+| M1 | Player — movement, edge clamp, single bullet | DONE | Verified 2026-08-16 with `tools/inputsim.py`: 1 px/frame both ways, clamped at x 0 and 232, one bullet per press, 6 presses during flight ignored, bullet rises 2 px/frame and frees its slot on frame 60. Ship and bullet observed on screen via `tools/screendump.py`; 60.00 FPS moving and firing. Lint pass clean. The `btnp` caveat below is the one gap. |
 | M2 | Fleet — 5 × 11 grid, stepped march, drop-and-reverse, waddle | TODO | |
 | M3 | Combat — bullet kills, scoring, speed-up curve | TODO | |
 | M4 | Threat — enemy fire, death, lives, game over | TODO | |
@@ -26,10 +26,14 @@ Legend: `TODO` · `IN PROGRESS` · `DONE` (verified in-console) · `BLOCKED`
 | M7 | Shell — title, game over, wave transitions, HUD, `pmem`, extra life | TODO | |
 | M8 | Audio and polish — SFX, fleet loop, explosions, perf pass | TODO | |
 
-**Current position:** M0 complete and verified in-console. Nothing is blocked; M1
-(player movement and the single bullet) is next. Both remaining workflow gaps closed
-this session — carts are packed with `pack.py`, and visual and frame-rate acceptance are
-now checked by `tools/screendump.py` and `tools/fpscheck.py` rather than assumed.
+**Current position:** M1 complete and verified in-console. Nothing is blocked; M2 (the
+55-invader fleet and its stepped march) is next, and it inherits a sprite pipeline —
+`SPRITE_SHEET` in `game.lua`, blitted to tile RAM at boot — that only needs new entries.
+The last verification gap closed this session: input is now scriptable through
+`tools/inputsim.py`, so behavioral acceptance criteria are run rather than argued.
+Everything M1 claims was measured except one thing, stated plainly in §6: the console's
+own `btnp` cannot be driven from RAM, so *press* versus *hold* is verified against the
+documented semantics through a probe-supplied `btnp`, not against the console's.
 
 ---
 
@@ -85,6 +89,15 @@ Verified 2026-08-16, third pass — the verification harness in `tools/`:
 | `trace()` under `--cli` | Output arrives with **no line break between calls** — a multi-line dump comes back as one flat stream, so parse by fixed width, not by lines |
 | `exit()` | Returns to the TIC-80 console; it does **not** quit the process. A driving script must kill it, or it hangs until timeout |
 
+Verified 2026-08-16, fourth pass — input simulation:
+
+| Check | State |
+|---|---|
+| Gamepad via RAM | Works for `btn`. `poke(0x0FF80, mask)` inside `TIC()` is visible to `btn()` on the same frame; the console rewrites the byte each frame, so the probe writes it every frame including zeros |
+| `btnp` via RAM | **Does not work.** A poked hold reads as a fresh press on every frame — `btnp(4)` true on all nine frames of a held mask. The previous-state snapshot comes from the real input device, not RAM. `tools/inputsim.py` keeps a standing scenario watching this, so a console upgrade that fixes it gets noticed rather than assumed |
+| Scripted scenarios | `python3 tools/inputsim.py` runs seven scenarios against the game's own state and reports pass/fail. `--hold` also added to `screendump.py` and `fpscheck.py` |
+| Keystroke injection | Still impossible. WSLg takes input from the Windows side; `xdotool`/`ydotool`/`wtype` are absent and `/dev/uinput` would not reach the compositor anyway |
+
 Syntax-only fallback, which is **not** a test — label results *syntax verified,
 behavior unverified* (`AGENTS.md` §3). Note it checks 5.4 against a 5.3 console:
 
@@ -98,6 +111,44 @@ luac5.4 -p game.lua
 
 Newest first. Record the *why*, not just the *what*.
 
+- **2026-08-16 — Simulate input by writing the gamepad byte in RAM, and substitute
+  `btnp` in the probe.** Every milestone from M1 on has acceptance criteria about
+  behavior under input, and nothing here can press a key (§2). GAMEPADS is 4 bytes at
+  `0x0FF80`, so `btn` is drivable for real. `btnp` is not — the console snapshots the
+  previous frame from the real input device, so a poked hold looks like a fresh press
+  every frame, which was measured rather than assumed. `tools/input-probe.lua` therefore
+  overrides the global `btnp` with an edge detector over the mask it wrote. This tests
+  `game.lua` unmodified under the semantics the wiki documents, and the substitution is
+  stated everywhere it matters rather than buried: `LINT-RULES.md` L054,
+  `docs/tic80-api.md`, §6 below. The alternative — declaring the criterion met by
+  reading the source — is what L054 exists to forbid.
+- **2026-08-16 — The sprite sheet lives in `game.lua` and is blitted into tile RAM at
+  boot.** `pack.py` writes a `CHUNK_CODE` chunk and nothing else, so the cart ships no
+  sprite data at all. Teaching `pack.py` to emit a `CHUNK_TILES` from a separate binary
+  would have made the sheet a second deliverable that `AGENTS.md` §1 says should not
+  exist, and editing sprites would have meant launching the console's editor. Instead
+  `SPRITE_SHEET` holds pixel rows as strings and `BOOT()` pokes them in — 64 `poke4`
+  calls per sprite, once, never in the frame path (L009). Sprites stay diffable text and
+  M2's six invader frames are new table entries, not a new pipeline. Recorded as
+  `LINT-RULES.md` L016, because drawing an unblitted id fails silently.
+- **2026-08-16 — The ship is 7 px wide inside its 8 px tile.** An 8-wide symmetric shape
+  has no centre column, so the muzzle and the 1 px bullet could not agree; at 7 wide the
+  barrel sits on column 3 and the bullet leaves from exactly there. Confirmed on screen:
+  bullet x 119 with the ship at x 116.
+- **2026-08-16 — `--hold` added to `screendump.py` and `fpscheck.py`.** Both were
+  measuring an idle cart, which for a game about moving and shooting is the one frame
+  that proves least. `AGENTS.md` §6 asks for the worst-case entity count; now it can be
+  asked for. M1 measured 60.00 FPS with right-plus-fire held, against 60.03 idle.
+- **2026-08-16 — M0's empty section labels and `DEBUG` flag removed.** `-- collision`
+  and `-- game state machine` over nothing are placeholders for structure that does not
+  exist, which is the speculative abstraction `AGENTS.md` §5 bans; L014 fixes the order
+  sections appear in, not that all of them must. The `DEBUG` flag went with its only
+  user, the `_VERSION` trace, whose question is now answered in `docs/lua-notes.md`.
+  Both come back the moment something needs them. `LINT-RULES.md` L015, amended.
+- **2026-08-16 — Still no state dispatcher, and `game.state` now starts at `PLAYING`.**
+  Same reasoning as M0's decision below: M1 has exactly one live state and five empty
+  stubs would be worse than none. `PLAYING` is simply what the cart now does. The
+  dispatch table arrives with the second real state, which is M4 or M7.
 - **2026-08-16 — Verify visual acceptance by reading VRAM, not by screenshotting.**
   M0's acceptance is "text visible" and no capture tool works here (§2), which had left
   the milestone stuck a session. TIC-80's framebuffer is just RAM, so `tools/screendump.py`
@@ -197,6 +248,18 @@ recorded in `docs/tic80-api.md` **before its first use**.
 - Two `print` gotchas recorded: its default color 15 is dark navy and invisible on the
   black the game clears to, and it returns the drawn width, which is how text gets
   centered.
+- M1 added, 2026-08-16, all verified from the wiki with URLs and dates: `spr`, `rect`,
+  `btn`, `btnp`, the player-1 button id table (left 2, right 3, A 4, confirming
+  `MISSION.md` §7), and `poke`/`poke4`. `print` and `print_centered` left the cart with
+  M0's placeholder text and will be re-verified when the HUD needs them in M7.
+- `docs/tic80-ram.md` gained the two regions M1 touches: TILES at `0x4000` and SPRITES
+  at `0x6000` (32 bytes per 8 × 8 tile, low nibble the left pixel, so `poke4` sees a
+  tile as 64 nibbles in row-major order), and GAMEPADS at `0x0FF80`.
+- `docs/lua-notes.md` stdlib list extended: `ipairs`, `tostring`, `string` (including
+  the `s:sub()` method form) and `table` all confirmed running in-console.
+- The `btnp` entry carries a `DISCREPANCY:` marker per `AGENTS.md` §4.3 — not between
+  the docs and the console, but between the console and RAM: `btnp` ignores writes to
+  the GAMEPADS region. It is the reason `tools/inputsim.py` supplies its own.
 
 ---
 
@@ -212,6 +275,21 @@ Per `AGENTS.md` §4.5: state the question, implement around it under a clearly s
 assumption, and record the assumption here. Mark answered ones `RESOLVED:` with the
 answer and its source; do not delete them.
 
+- **OPEN: Does the console's own `btnp` hold to one shot per press, under a real
+  finger?** Assumed **yes**, on the wiki's documented semantics — `btnp(id)` with `hold`
+  and `period` omitted returns true only on the frame a button becomes pressed, and
+  `game.lua` omits both deliberately. The assumption cannot be closed here: the gamepad
+  RAM that drives `btn` is invisible to `btnp` (§2), so `tools/inputsim.py` substitutes
+  an edge-detecting `btnp` of its own. What *is* measured against the console is the
+  stronger invariant — six presses during a bullet's flight produced one bullet — so the
+  worst case if the assumption is wrong is a stream at the fire rate, never two bullets
+  at once. Closable in seconds by a human holding the fire key on a windowed run;
+  otherwise it closes when a keystroke-injection route is found.
+- **OPEN: Is 1 px/frame the right ship speed, and 2 px/frame the right bullet?** They
+  are `MISSION.md` §3's suggested values, implemented as named constants
+  (`PLAYER_SPEED`, `BULLET_SPEED`) so tuning is a one-line change. §3 says to tune by
+  playing, which no tool here can do — carried until someone plays it, and worth
+  revisiting once the fleet in M2 gives the ship something to aim at.
 - **RESOLVED: Does "HELLO" actually render?** **Yes.** Source: `tools/screendump.py`,
   run 2026-08-16, reading the framebuffer through `peek4`. The screen is 32,564 px of
   color 0 and 76 px of color 12, forming legible "HELLO" glyphs in a bounding box of

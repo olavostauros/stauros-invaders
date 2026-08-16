@@ -41,7 +41,11 @@ than every-edit:
 ```bash
 python3 tools/screendump.py    # L051 - what is actually on screen
 python3 tools/fpscheck.py      # L052 - frame rate, windowed
+python3 tools/inputsim.py      # L054 - behavior under scripted input
 ```
+
+`screendump.py` and `fpscheck.py` both take `--hold <mask>` so the frame they measure is
+the milestone's worst case rather than an idle one (L052).
 
 ---
 
@@ -122,12 +126,17 @@ calls (`TIC`, `BOOT`), a documented TIC-80 API function, a Lua stdlib table (`ma
 accidental global from a missing `local` — which in TIC-80 persists across frames and
 produces bugs that look like corruption. `AGENTS.md` §2, §5. **Automated + read.**
 
-Current allowlist: `TIC`, `BOOT`, `game`, `math`, `_VERSION`, plus documented API calls.
+Current allowlist: `TIC`, `BOOT`, `game`, `math`, `ipairs`, `_VERSION`, plus documented
+API calls.
 
 *Amended 2026-08-16: `_VERSION` added. It is a read-only Lua stdlib global, not an
 accidental one, and it appears in the `_ENV` output because `BOOT()` traces it under
 `DEBUG`. Lua stdlib tables and globals belong on this list; TIC-80 calls still have to
 earn their place through L006.*
+
+*Amended 2026-08-16, M1: `ipairs` added, same reasoning. `_VERSION` stays on the list
+though nothing references it now — the `DEBUG` trace that used it went away with M0's
+scaffolding, and the allowlist is what is permitted, not what is present.*
 
 ### L011 — the global list is the API inventory
 The same `_ENV` output is the authoritative list of which TIC-80 functions the cart
@@ -152,6 +161,30 @@ naming the section (`AGENTS.md` §5). **Read.**
 ### L015 — no dead code
 No commented-out blocks, no unreferenced functions, no abstraction with one caller and
 no second caller planned. It is all recoverable from git (`AGENTS.md` §5). **Read.**
+
+An empty section label counts. `-- collision` over nothing is a placeholder for
+structure that does not exist yet, which is the speculative abstraction `AGENTS.md` §5
+bans; L014 fixes the order sections appear in, not that all of them must.
+
+*Amended 2026-08-16 during M1, when M0's empty `-- collision` and `-- game state
+machine` labels were removed.*
+
+### L016 — every sprite id drawn is one the cart blits
+`pack.py` writes a `CHUNK_CODE` chunk and nothing else, so the cartridge ships **no
+sprite sheet**: tile RAM is whatever the console left there. Every id passed to `spr()`
+must have an entry in `game.lua`'s `SPRITE_SHEET`, which `BOOT()` blits into tile RAM.
+Drawing an id that was never blitted does not error — it draws garbage or nothing, which
+is L008's failure mode wearing a different hat.
+
+```bash
+grep -oE 'spr\(([A-Z_]+)' game.lua | sort -u    # then check each against SPRITE_SHEET
+```
+
+**Automated, then read.**
+
+*Added 2026-08-16 during M1, with the first `spr()` call. The sheet living in code rather
+than in the cart is a consequence of the non-PRO packing workaround, and it is exactly
+the kind of thing a later agent would assume away.*
 
 ---
 
@@ -241,10 +274,17 @@ python3 tools/fpscheck.py
 reports a number that is unrelated to the console's pacing — flattering nonsense early
 on, and it would keep flattering right up until real frames started dropping.
 
+`AGENTS.md` §6 says *worst-case entity count*, so pass `--hold <mask>` to keep the
+milestone's busiest frame on screen while it measures. An idle cart is not the worst
+case and its frame rate is not the one the criterion asks about.
+
 *Added 2026-08-16, when M0's 60 FPS criterion was first actually measured. The tool
 cross-checks the console's `time()` against the host wall clock, because `time()` alone
 would be circular if TIC-80 derived it from the frame counter. It does not
 (`docs/tic80-api.md`), and that is now a recorded fact rather than an assumption.*
+
+*Amended 2026-08-16 during M1, when `--hold` was added. M1 measured 60.00 FPS with
+`--hold 24` — moving and firing continuously — against 60.03 idle.*
 
 ### L053 — verification probes append to `game.lua`, never edit it
 The harness in `tools/` concatenates a probe onto a copy of `game.lua` and wraps the
@@ -257,6 +297,43 @@ forbids. Wrapping the global `TIC` gets the same measurement with the code under
 running byte-for-byte as committed.*
 
 ---
+
+### L054 — behavioral acceptance is driven with scripted input, never reasoned about
+A criterion phrased as *what the game does when the player does X* — "ship moves
+smoothly", "holding fire produces one bullet, not a stream" — closes by running X, not
+by reading the code and finding it convincing. Reading the code cannot catch an
+off-by-one in a clamp or an input the console reports differently than expected.
+
+```bash
+python3 tools/inputsim.py
+```
+
+The tool pokes the player-1 gamepad byte at `0x0FF80` before each frame and traces the
+`game` table afterwards, so `game.lua` runs unmodified (L053). Add a scenario per
+milestone; a milestone whose behavior has no scenario has not been tested.
+
+**One thing it cannot fake, and you must not forget:** `btnp` compares against a snapshot
+the console takes from the real input device, not from RAM, so a poked hold reads as a
+fresh press every frame. `inputsim.py` substitutes its own edge-detecting `btnp` to get
+the semantics the wiki documents. That means press-versus-hold behavior is verified
+against documented semantics rather than against the console's own `btnp`; `btn`, and
+therefore everything about movement, is the console's for real.
+
+*Added 2026-08-16 during M1. Every milestone from here to M8 has acceptance criteria
+about behavior under input, and this environment cannot press a key — WSLg takes input
+from the Windows side and no injection tool is installed. Without this the whole series
+would close on "it looks right in the source".*
+
+### L055 — a probe never encodes "absent" as a legal value
+Verification output distinguishes *no entity* from *an entity at coordinate n*. A probe
+that traces `-1` for a despawned bullet is wrong the moment a live bullet's `y` reaches
+`-1` on its way off screen — and it fails by quietly under-reporting, in the direction of
+saying the game is fine. Trace liveness as its own field. **Read.**
+
+*Added 2026-08-16 during M1, where exactly that happened: the first `input-probe.lua`
+used `-1` as the no-bullet sentinel and truncated the last frame of every bullet's
+flight. The scenario still passed, which is the point — a broken check that passes is
+worse than one that fails.*
 
 ## Extending these rules
 

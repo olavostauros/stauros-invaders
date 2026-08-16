@@ -1,4 +1,4 @@
--- appended after game.lua by scratch/fpscheck.sh. Measures the console's actual frame
+-- appended after game.lua by tools/fpscheck.py. Measures the console's actual frame
 -- pacing over a fixed number of frames, using time() rather than a host-side stopwatch
 -- so window startup and shutdown are excluded from the sample.
 
@@ -7,8 +7,11 @@ local probe_frames = 0
 local probe_t0 = 0
 local PROBE_SAMPLE = 600
 local PROBE_WARMUP = 60
+local PROBE_HOLD = 0
+local PROBE_GAMEPAD = 0x0FF80
 
 function TIC()
+  poke(PROBE_GAMEPAD, PROBE_HOLD)
   _TIC()
   probe_frames = probe_frames + 1
   if probe_frames == PROBE_WARMUP then

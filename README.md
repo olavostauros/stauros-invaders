@@ -149,15 +149,46 @@ This is better than a screenshot for the checks that matter: it gives exact pixe
 coordinates and palette indices, which is what catches text drawn in an invisible color
 or off by a pixel. It is `LINT-RULES.md` L051.
 
+Add `--hold <mask> --frames <n>` to dump a frame mid-action instead of at rest — see
+below for what the mask is.
+
+### Pressing buttons, without a keyboard
+
+Nothing here can press a key: WSLg takes input from the Windows side, and no injection
+tool is installed. But the gamepad is also just RAM — 4 bytes at `0x0FF80`, one bit per
+button — so it can be written directly:
+
+```bash
+python3 tools/inputsim.py
+```
+
+That appends `tools/input-probe.lua` to a copy of `game.lua`, writes the player-1
+gamepad byte before each frame, and traces the `game` table afterwards, so behavior is
+read out of the game's own state rather than guessed at. Masks are `1 << button`:
+left is 4, right 8, fire 16, so `--hold 24` is right-plus-fire.
+
+```
+hold fire for 300 frames
+  PASS  one bullet, not a stream: 1 bullet(s) spawned in 300 frames of held fire
+  PASS  bullet rises 2 px per frame: y 115 -> -1 over 59 frames, step set [2]
+```
+
+**One catch.** `btn` reads that RAM and works perfectly. `btnp` does not — it compares
+against a snapshot taken from the real input device, so a poked hold looks like a fresh
+press on every frame. The probe supplies its own edge-detecting `btnp` instead, which
+means press-versus-hold is checked against the semantics the wiki documents rather than
+against the console's own implementation. This is `LINT-RULES.md` L054.
+
 ### Checking the frame rate
 
 ```bash
-python3 tools/fpscheck.py
+python3 tools/fpscheck.py --hold 24
 ```
 
 Runs windowed, because `--cli` is unthrottled and its frame rate means nothing. It
 cross-checks the console's `time()` against the host wall clock, since `time()` alone
-would be circular if TIC-80 derived it from the frame counter — it does not. This is
+would be circular if TIC-80 derived it from the frame counter — it does not. Pass
+`--hold` so it measures the milestone's worst case rather than an idle screen. This is
 `LINT-RULES.md` L052.
 
 ## Linting
@@ -185,7 +216,7 @@ AGENTS.md       operating rules for working in this repo
 LINT-RULES.md   lint rules and their check commands
 PROGRESS.md     running log: milestone status, decisions, open questions
 docs/           cached TIC-80 API signatures, RAM map, and Lua notes
-tools/          verification harness: screendump.py, fpscheck.py, and their probes
+tools/          verification harness: screendump.py, fpscheck.py, inputsim.py, probes
 scratch/        throwaway experiments and generated intermediates (gitignored)
 ```
 

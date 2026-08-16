@@ -73,6 +73,98 @@ hardcoding an offset.
 **Gotcha:** the default `color=15` is dark navy (`#333C57`) in SWEETIE-16, which is
 near-invisible against the default black `cls()`. Always pass a color explicitly.
 
+### `spr`
+
+Read 2026-08-16 from https://github.com/nesbox/TIC-80/wiki/spr
+
+```lua
+spr(id, x, y, [colorkey=-1], [scale=1], [flip=0], [rotate=0], [w=1], [h=1])
+```
+
+- `id` — sprite index 0..511. 0..255 are the tiles at RAM `0x4000`, 256..511 the
+  sprites at `0x6000` (`docs/tic80-ram.md`).
+- `x`, `y` — top-left corner on screen.
+- `colorkey` — palette index drawn as transparent. Default `-1`, meaning fully opaque,
+  so a sprite drawn without one paints its background over whatever is behind it.
+- `scale` — integer scale factor. Default 1.
+- `flip` — 0 none, 1 horizontal, 2 vertical, 3 both. Default 0.
+- `rotate` — 90° steps. Default 0.
+- `w`, `h` — draw a composite block of `w × h` sprites, consumed left-to-right then
+  top-to-bottom from `id`. Default 1, 1.
+
+Returns nothing.
+
+### `rect`
+
+Read 2026-08-16 from https://github.com/nesbox/TIC-80/wiki/rect
+
+```lua
+rect(x, y, width, height, color)
+```
+
+- `x`, `y` — top-left corner. `width`, `height` — size in pixels.
+- `color` — palette index for the fill.
+
+No optional parameters and no return value. Filled; `rectb` draws only the border.
+
+---
+
+## Input
+
+### `btn`
+
+Read 2026-08-16 from https://github.com/nesbox/TIC-80/wiki/btn
+
+```lua
+btn(id) -> is_pressed
+btn()   -> gamepads bitfield
+```
+
+- `id` — button 0..31. Returns whether it is **held this frame**.
+- Called with no argument, returns all 32 button states as one integer.
+
+Indices below 0 or above 31 wrap rather than erroring.
+
+### `btnp`
+
+Read 2026-08-16 from https://github.com/nesbox/TIC-80/wiki/btnp
+
+```lua
+btnp(id, [hold], [period]) -> is_pressed
+btnp()                     -> gamepads bitfield
+```
+
+- `id` — button 0..31. Returns true only on the frame the button **became** pressed.
+- `hold` — ticks a held button waits before auto-repeat begins.
+- `period` — ticks between repeats once `hold` has elapsed.
+
+**Gotcha, and the one place this project deliberately omits optional arguments
+(`LINT-RULES.md` L007):** `hold` and `period` are what *turn on* auto-repeat. Omitting
+both is the only documented way to get exactly one true per press, which is what the
+single-bullet rule needs. Supplying them makes a held button fire repeatedly.
+
+**DISCREPANCY (not with the docs, but with RAM):** `btnp` compares against a snapshot of
+the previous frame's input taken from the real input device, *not* from the GAMEPADS
+region of RAM. Writing that region with `poke` therefore drives `btn` correctly but makes
+`btnp` return true on every frame of a simulated hold — measured 2026-08-16, true on all
+nine frames of a poked hold. This is why `tools/inputsim.py` substitutes its own `btnp`,
+and it keeps a standing scenario watching for the day the console's behavior changes.
+
+### Button ids
+
+Read 2026-08-16 from https://github.com/nesbox/TIC-80/wiki/key-map
+
+Player 1 is 0..7; each further player adds 8, so player 2 is 8..15 and so on.
+
+| Id | Button | Id | Button |
+|---|---|---|---|
+| 0 | up | 4 | A |
+| 1 | down | 5 | B |
+| 2 | left | 6 | X |
+| 3 | right | 7 | Y |
+
+Confirms `MISSION.md` §7's left/right/A as 2/3/4.
+
 ---
 
 ## Memory
@@ -94,6 +186,24 @@ first. The wiki's own example is that byte `0x4000` is nibbles `0x8000` (low) an
 granularity, each with its own address scale.
 
 Used by `tools/screendump.py` to read the framebuffer; see `docs/tic80-ram.md`.
+
+### `poke`, `poke4`
+
+Read 2026-08-16 from https://github.com/nesbox/TIC-80/wiki/poke
+
+```lua
+poke(addr, val, [bits=8])
+poke4(addr4, val4)
+```
+
+- `poke(addr, val)` writes one byte, `val` 0..255, at byte address `addr`.
+- `poke4(addr4, val4)` writes one nibble, `val4` 0..15, at **nibble** address
+  `addr4` — twice the byte address, low nibble first. `poke4(a, v)` and
+  `poke(a, v, 4)` are the same call.
+- `poke2` and `poke1` follow at 2- and 1-bit granularity, each with its own scale.
+
+Returns nothing. `game.lua` uses `poke4` to blit its sprite sheet into tile RAM at boot;
+`tools/` uses `poke` to write the gamepad byte.
 
 ---
 

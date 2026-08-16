@@ -1,13 +1,18 @@
--- appended after game.lua by scratch/screendump.sh; wraps the cart's own TIC so the
+-- appended after game.lua by tools/screendump.py; wraps the cart's own TIC so the
 -- pixels dumped are the ones game.lua actually drew.
+
+local PROBE_HOLD = 0
+local PROBE_WARMUP = 2
+local PROBE_GAMEPAD = 0x0FF80
 
 local _TIC = TIC
 local probe_frames = 0
 
 function TIC()
+  poke(PROBE_GAMEPAD, PROBE_HOLD)
   _TIC()
   probe_frames = probe_frames + 1
-  if probe_frames < 2 then return end
+  if probe_frames < PROBE_WARMUP then return end
   trace("VRAMBEGIN", 12)
   for y = 0, 135 do
     local row = {}

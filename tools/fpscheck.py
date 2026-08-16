@@ -13,8 +13,13 @@ sample lengths and divide the extra frames by the extra wall-clock seconds.
 Runs windowed on purpose. --cli is unthrottled, with no vsync and no frame limiter, so
 it measures the host CPU rather than the console's pacing.
 
+The milestone's worst case has to be on screen while it measures, so --hold writes a
+gamepad mask to RAM every frame, the same way tools/inputsim.py does. Both samples hold
+the same mask, so the per-frame load is identical and the differential stays valid.
+
 Usage:
     python3 tools/fpscheck.py
+    python3 tools/fpscheck.py --hold 24   # right + fire held throughout
 """
 
 import os
@@ -27,9 +32,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHORT, LONG = 300, 1200
 
 
-def run(sample):
+def run(sample, hold):
     probe = open(os.path.join(ROOT, "tools", "fps-probe.lua"), encoding="utf-8").read()
     probe = re.sub(r"local PROBE_SAMPLE = \d+", f"local PROBE_SAMPLE = {sample}", probe)
+    probe = re.sub(r"local PROBE_HOLD = \d+", f"local PROBE_HOLD = {hold}", probe)
     os.makedirs(os.path.join(ROOT, "scratch"), exist_ok=True)
     with open(os.path.join(ROOT, "scratch", "fps.lua"), "w", encoding="utf-8") as f:
         f.write(open(os.path.join(ROOT, "game.lua"), encoding="utf-8").read() + probe)
@@ -62,9 +68,11 @@ def run(sample):
 
 
 def main():
-    line_s, host_s = run(SHORT)
-    line_l, host_l = run(LONG)
+    hold = int(sys.argv[sys.argv.index("--hold") + 1]) if "--hold" in sys.argv else 0
+    line_s, host_s = run(SHORT, hold)
+    line_l, host_l = run(LONG, hold)
 
+    print(f"gamepad mask {hold} held throughout")
     print(f"sample {SHORT:5d}: console {line_s}   host {host_s:.2f} s to the trace")
     print(f"sample {LONG:5d}: console {line_l}   host {host_l:.2f} s to the trace")
 
