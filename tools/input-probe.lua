@@ -48,5 +48,7 @@ function TIC()
   -- rather than a sentinel coordinate.
   trace("[" .. frame .. " " .. mask .. " " .. game.player.x .. " " ..
         (game.bullet.active and 1 or 0) .. " " ..
-        game.bullet.y .. " " .. game.bullet.x .. " " .. console_btnp .. "]", 12)
+        game.bullet.y .. " " .. game.bullet.x .. " " .. console_btnp .. " " ..
+        game.fleet.x .. " " .. game.fleet.y .. " " .. game.fleet.dir .. " " ..
+        game.fleet.frame .. "]", 12)
 end

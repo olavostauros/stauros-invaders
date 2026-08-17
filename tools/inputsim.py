@@ -35,6 +35,12 @@ SCREEN_W, SPRITE_W = 240, 8
 START_X, X_MIN, X_MAX = 116, 0, SCREEN_W - SPRITE_W
 BULLET_SPEED, MUZZLE_X = 2, 3
 
+FLEET_COLS, FLEET_COL_SPACING = 11, 16
+FLEET_WIDTH = (FLEET_COLS - 1) * FLEET_COL_SPACING + SPRITE_W
+FLEET_START_X, FLEET_START_Y = (SCREEN_W - FLEET_WIDTH) // 2, 20
+FLEET_X_MAX = SCREEN_W - FLEET_WIDTH
+FLEET_STEP_FRAMES, FLEET_STEP_X, FLEET_DROP_Y = 55, 2, 6
+
 
 def run(script):
     """Run game.lua under the probe with `script` as [(frames, mask), ...] and return
@@ -72,9 +78,11 @@ def run(script):
         sys.exit("the cart did not finish the script. console output:\n" + text[-2000:])
     frames = [
         {"f": int(a), "mask": int(b), "x": int(c),
-         "live": int(d), "by": int(e), "bx": int(f), "cbtnp": int(g)}
-        for a, b, c, d, e, f, g in re.findall(
-            r"\[(\d+) (\d+) (-?\d+) (\d) (-?\d+) (-?\d+) (\d)\]", text)
+         "live": int(d), "by": int(e), "bx": int(f), "cbtnp": int(g),
+         "fx": int(h), "fy": int(i), "fdir": int(j), "fframe": int(k)}
+        for a, b, c, d, e, f, g, h, i, j, k in re.findall(
+            r"\[(\d+) (\d+) (-?\d+) (\d) (-?\d+) (-?\d+) (\d) "
+            r"(-?\d+) (-?\d+) (-?\d+) (\d)\]", text)
     ]
     total = sum(n for n, _ in script)
     if len(frames) != total:
@@ -172,6 +180,56 @@ def scenario_both_directions():
                  f"x stayed at {sorted(xs)}")
 
 
+def scenario_fleet_march():
+    """Long enough to reach both screen edges: 18 steps right, then 36 back to the left,
+    at 55 frames a step. Costly in frames, free in wall clock - --cli is unthrottled."""
+    total = 3100
+    frames = run([(total, IDLE)])
+    print(f"\nidle for {total} frames, watching the fleet march")
+
+    moved = [(prev, fr) for prev, fr in zip(frames, frames[1:])
+             if (fr["fx"], fr["fy"], fr["fdir"], fr["fframe"]) !=
+                (prev["fx"], prev["fy"], prev["fdir"], prev["fframe"])]
+    off_cadence = [fr["f"] for _, fr in moved if fr["f"] % FLEET_STEP_FRAMES != 0]
+    expected_steps = total // FLEET_STEP_FRAMES
+    ok = check(f"the fleet changes only every {FLEET_STEP_FRAMES}th frame",
+               not off_cadence and len(moved) == expected_steps,
+               f"{len(moved)} changes, all on multiples of {FLEET_STEP_FRAMES}"
+               if not off_cadence else f"{len(off_cadence)} off-cadence, "
+               f"first on frame {off_cadence[0]}")
+
+    ok &= check("the waddle swaps on every step",
+                all(fr["fframe"] != prev["fframe"] for prev, fr in moved),
+                f"frame toggled on {sum(1 for p, f in moved if f['fframe'] != p['fframe'])}"
+                f" of {len(moved)} steps")
+
+    slides = [(p, f) for p, f in moved if f["fy"] == p["fy"]]
+    drops = [(p, f) for p, f in moved if f["fy"] != p["fy"]]
+    bad_slide = [f["f"] for p, f in slides
+                 if f["fx"] - p["fx"] != p["fdir"] * FLEET_STEP_X or f["fdir"] != p["fdir"]]
+    ok &= check(f"a plain step moves {FLEET_STEP_X} px in the current direction",
+                not bad_slide,
+                f"{len(slides)} steps, every one {FLEET_STEP_X} px along fdir"
+                if not bad_slide else f"first wrong on frame {bad_slide[0]}")
+
+    bad_drop = [f["f"] for p, f in drops
+                if f["fx"] != p["fx"] or f["fy"] - p["fy"] != FLEET_DROP_Y
+                or f["fdir"] != -p["fdir"] or p["fx"] not in (0, FLEET_X_MAX)]
+    ok &= check("hitting an edge drops one row and reverses, without moving sideways",
+                len(drops) >= 2 and not bad_drop,
+                f"{len(drops)} drops, on frames {[f['f'] for _, f in drops]} at x "
+                f"{[p['fx'] for p, _ in drops]}, y {[f['fy'] for _, f in drops]}"
+                if not bad_drop else f"first wrong on frame {bad_drop[0]}")
+
+    ok &= check("both edges reached, and never crossed",
+                {p["fx"] for p, _ in drops} == {0, FLEET_X_MAX}
+                and min(fr["fx"] for fr in frames) == 0
+                and max(fr["fx"] for fr in frames) == FLEET_X_MAX,
+                f"fleet x spanned {min(fr['fx'] for fr in frames)}.."
+                f"{max(fr['fx'] for fr in frames)}, bounds 0..{FLEET_X_MAX}")
+    return ok
+
+
 def main():
     ok = True
     ok &= scenario_move(LEFT, "left", lambda f: max(X_MIN, START_X - f))
@@ -181,6 +239,7 @@ def main():
     ok &= scenario_tap_while_in_flight()
     ok &= scenario_both_directions()
     ok &= scenario_console_btnp()
+    ok &= scenario_fleet_march()
     print("\nall scenarios passed" if ok else "\nsome scenarios failed")
     sys.exit(0 if ok else 1)
 

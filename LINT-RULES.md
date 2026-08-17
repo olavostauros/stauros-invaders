@@ -23,6 +23,7 @@ luac5.4 -l -p game.lua | grep -oE '_ENV "[A-Za-z_][A-Za-z0-9_]*"' | sort -u   # 
 awk 'length > 100 {print FILENAME":"FNR": "length" chars"}' game.lua          # L020
 grep -nP '\t| +$' game.lua                                                    # L021
 grep -nE '^\s*--.*(===|---|\*\*\*|###|___|[─│┌┐└┘█▀▄])' game.lua              # L030
+grep -nE 'spr\(' game.lua | grep -vE 'spr\([A-Z_]+[,)]'                       # L016
 grep -nE -e '--.*\b(TODO|FIXME|XXX|HACK|NOTE)\b' game.lua                     # L031
 grep -nE '\b(require|dofile|loadfile|io\.|os\.|package\.|collectgarbage)' game.lua  # L002
 grep -nE 'while +true|repeat' game.lua                                        # L003
@@ -31,8 +32,8 @@ grep -n 'DEBUG *= *true' game.lua                                             # 
 [ game.tic -nt game.lua ] || echo "L050: game.tic is stale, run python3 pack.py"
 ```
 
-Each command should print nothing, except the `_ENV` one — that prints the global list,
-which you read against L010's allowlist.
+Each command should print nothing, except two that print lists to be read: the `_ENV`
+one, against L010's allowlist, and the `spr(` one, against L016's sprite sheet.
 
 Closing a milestone additionally needs the two checks that require running the cart.
 They take seconds and half a minute respectively, so they are milestone-close rather
@@ -177,7 +178,8 @@ Drawing an id that was never blitted does not error — it draws garbage or noth
 is L008's failure mode wearing a different hat.
 
 ```bash
-grep -oE 'spr\(([A-Z_]+)' game.lua | sort -u    # then check each against SPRITE_SHEET
+grep -oE 'spr\(([A-Z_]+)' game.lua | sort -u        # ids named directly
+grep -nE 'spr\(' game.lua | grep -vE 'spr\([A-Z_]+[,)]'   # ids the first grep cannot see
 ```
 
 **Automated, then read.**
@@ -185,6 +187,15 @@ grep -oE 'spr\(([A-Z_]+)' game.lua | sort -u    # then check each against SPRITE
 *Added 2026-08-16 during M1, with the first `spr()` call. The sheet living in code rather
 than in the cart is a consequence of the non-PRO packing workaround, and it is exactly
 the kind of thing a later agent would assume away.*
+
+*Amended 2026-08-17 during M2. The first grep only matches an id spelled as a bare
+constant, and `draw_fleet` passes `FLEET_ROW_SPRITE[row] + fleet.frame` — so the check
+reported clean while saying nothing about six of the cart's seven sprites. The second
+grep lists every `spr()` call the first one could not resolve; for each, follow the id
+back to the table it comes from and check **every** value that table can produce against
+`SPRITE_SHEET`. Animation frames are addressed as `base + frame`, so a type's frames must
+be blitted at consecutive ids: a gap draws a neighbouring sprite rather than erroring,
+which is the same silent failure in a new place.*
 
 ---
 
