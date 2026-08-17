@@ -57,6 +57,30 @@ Confirmed present: `math` (via `math.floor`), `_VERSION`, `ipairs`, `tostring`, 
 method form, and `table.concat` all run in-console (2026-08-16, `game.lua` and
 `tools/`).
 
+### `math.random` is present, and the console seeds it from the clock
+
+Confirmed 2026-08-17 for M4's enemy fire. `math.random` exists in both forms —
+`math.random(m)` for an integer in `1..m` and `math.random()` for a float in `[0,1)`.
+
+**The stream is not reproducible across runs, and a cart must not be written as if it
+were.** Six headless runs of the same cart, spaced three seconds apart, returned six
+different sequences (`3 5 9 4 1`, `6 9 3 7 8`, `8 8 2 5 4`, `11 2 7 3 6`, `8 11 1 1 2`,
+`11 11 7 4 4` from `math.random(11)`). TIC-80 1.1.2837 seeds the generator itself; the
+cart never calls `math.randomseed`.
+
+**DISCREPANCY, resolved:** an earlier note here claimed the opposite — that three
+consecutive runs came back byte for byte identical — and that measurement was real but
+misread. The seed has roughly one-second granularity: four runs launched *simultaneously*
+returned `3 11 4 6 4` four times over, and two launched two seconds later agreed with each
+other and differed from those. Runs fast enough to land in the same second share a stream,
+which is exactly what a back-to-back check produces. `AGENTS.md` §4.3 is the rule this
+broke: the conclusion outran the experiment.
+
+The consequence is for `tools/`, not for `game.lua`: a scenario may not depend on which
+column fires or on which frame the ship dies, and cannot re-run a script expecting the
+same shots. Assert the *rule* — grid alignment, cadence, bottom-most-in-column — over
+whatever the fleet happens to do that run.
+
 Everything else is **unverified**. `AGENTS.md` §2 says to assume `require`, `io.*`,
 `os.execute`, file access, and `package` are unavailable until proven otherwise, and
 nothing so far has proven otherwise. Test in-console before using any stdlib table not

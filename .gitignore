@@ -7,6 +7,9 @@ scratch/
 # TIC-80's own config/cache, created by running with --fs=.
 .local/
 
+# Python bytecode, from importing tools/ modules directly to poke at a trace
+__pycache__/
+
 # Editor / OS cruft
 .DS_Store
 *.swp

@@ -20,21 +20,25 @@ Legend: `TODO` · `IN PROGRESS` · `DONE` (verified in-console) · `BLOCKED`
 | M1 | Player — movement, edge clamp, single bullet | DONE | Verified 2026-08-16 with `tools/inputsim.py`: 1 px/frame both ways, clamped at x 0 and 232, one bullet per press, 6 presses during flight ignored, bullet rises 2 px/frame and frees its slot on frame 60. Ship and bullet observed on screen via `tools/screendump.py`; 60.00 FPS moving and firing. Lint pass clean. The `btnp` caveat below is the one gap. |
 | M2 | Fleet — 5 × 11 grid, stepped march, drop-and-reverse, waddle | DONE | Verified 2026-08-17 with `tools/inputsim.py`: 56 steps in 3,100 frames, every one on a multiple of 55, each a 2 px move along the current direction, the waddle toggling on all 56; two drop-and-reverses, at x 72 and x 0, each +6 px in y with no sideways move. Grid observed via `tools/screendump.py` — 55 invaders at x 36..203, y 20..67, three distinct shapes across the five rows — and again at frame 1050, flush right at x 72..239 and one row lower at y 26. 60.00 FPS with the full fleet, moving and firing. Lint pass clean. |
 | M3 | Combat — bullet kills, scoring, speed-up curve | DONE | Verified 2026-08-17 with `tools/inputsim.py`, eleven scenarios: a shot from the start position kills the bottom-row invader on frame 25 — the frame the two boxes first overlap — for 10 points, thinning only row 5 and freeing the bullet at y 67 rather than at the top of the screen; over 4,000 frames of tap-firing, all 25 kills scored exactly their own row's value, all three values (10/20/30) occurred, and the total matched the survivors; sweeping and firing for 8,160 frames killed 53 of 55, and all 820 fleet steps landed exactly where the living count says they should, the interval falling from 53 frames to 2. A fleet emptied on frame 100 held still for the next 300 frames without erroring. Kills observed on screen via `tools/screendump.py` — after 600 frames of held fire, 47 invaders left with gaps in all five rows. 60.00 FPS console / 60.04 host, moving and firing. Lint pass clean; L056 added. |
-| M4 | Threat — enemy fire, death, lives, game over | TODO | |
+| M4 | Threat — enemy fire, death, lives, game over | DONE | Verified 2026-08-17 with `tools/inputsim.py`, five new scenarios: over 2,000 frames the fleet fired 76 shells, every uninterrupted gap exactly 25 frames, never more than 2 in the air at once, each falling 2 px/frame from a muzzle that landed on the grid in all eleven columns and freeing its slot by y 136; after a sweep had emptied the bottom of several columns, all 44 shells of a quiet 1,200-frame window came from the bottom-most living invader of their column, across four different rows; a ship jittering under the fleet was hit at x 115 by a shell at (115, 118), lost a life, held for exactly 90 frames of `PLAYER_DEAD` with the timer 90 down to 1, ignored the left/right it was still being given, saw no shell fired at it while dying, and came back at x 116 — the fleet frozen at (48, 20) throughout; three deaths spent three lives and the third ran into `GAME_OVER` 90 frames later, where the fleet, score and sky all stopped for the remaining 2,112 frames; and a fleet placed one drop above the player's row dropped to y 72 and ended the game on that same frame with all three lives still in hand. Observed on screen via `tools/screendump.py`: a yellow shell 1 × 3 px at (167, 98..100), the red explosion 22 px filling the ship's cell at x 116..123, y 120..127 with no green ship and no shells left in the sky, and a game over after the last life with 55 invaders standing and no ship drawn. 60.00 FPS console / 60.48 host differential, moving and firing. Lint pass clean; L057 and L058 added. |
 | M5 | Bunkers — cell-grid erosion, per-wave reset | TODO | |
 | M6 | Mystery ship — spawn timing, traversal, bonus | TODO | |
 | M7 | Shell — title, game over, wave transitions, HUD, `pmem`, extra life | TODO | |
 | M8 | Audio and polish — SFX, fleet loop, explosions, perf pass | TODO | |
 
-**Current position:** M3 complete and verified in-console. The game is now playable in one
-direction only — the fleet can be shot down and the score climbs, but nothing can hurt the
-player. Nothing is blocked; M4 (enemy fire from the bottom-most invader in each column,
-player death, three lives, game over on the last life and on the fleet landing) is next.
-Two things M4 inherits: `game.fleet.count` is maintained on every kill, so "bottom-most
-living invader in a column" is a scan of the same `alive` grid; and M4 is the milestone
-that brings the second real game state, which is when `TIC()` finally gets the dispatch
-table `MISSION.md` §4 asks for and `game.state` stops being decorative. The empty fleet
-holds still rather than starting a wave (§3 below) — `WAVE_CLEAR` remains M7's.
+**Current position:** M4 complete and verified in-console. The game is losable in both ways
+`MISSION.md` §3 names, and `TIC()` now dispatches through `STATE_FRAME` over three real
+states, so `game.state` has stopped being decorative. Nothing is blocked; M5 (four
+cell-grid bunkers, eroded from both directions, reset per wave) is next.
+
+Three things M5 inherits. Bunkers sit between two bullet paths that both already exist and
+both already resolve their own collisions — `collide_bullet_fleet()` and `player_hit()` —
+so the erosion check is a third box test on the same frame, not a new system. The harness
+now knows about states: a scenario says which state it is measuring in (L057) and may not
+lean on the random stream (L058), both of which M5's scenarios inherit for free. And the
+ship at x 116 sits under fleet column 6 and is shot at within 50 frames, so any new
+scenario about the *player* runs against an emptied fleet (`clear_at=1`) rather than trying
+to walk out of range — 116 frames at 1 px a frame is far too slow to escape.
 
 ---
 
@@ -112,6 +116,63 @@ luac5.4 -p game.lua
 
 Newest first. Record the *why*, not just the *what*.
 
+- **2026-08-17 — `ENEMY_FIRE_FRAMES` is 25, not 45, so that the 3-shell cap can bind.**
+  User's call, taken before the work started, on a measurement: a bottom-row shell spawns
+  at y 68 and despawns at y 136, which is 34 frames of flight, so at a 45-frame cooldown
+  the sky was always empty before the next shot was allowed and `ENEMY_BULLET_MAX` was
+  dead code. `MISSION.md` §3 fixes the cap at 3 and leaves the cooldown to tuning. At 25
+  two shells are commonly airborne and three become reachable late in a wave, when the
+  bottom-most survivor of a column is high on screen and its shell has 54 frames to fall.
+  Measured after the change: 2 at once with a full fleet, never more than 3.
+- **2026-08-17 — The death pause freezes the whole simulation, not just the input.**
+  `MISSION.md` §4 says `PLAYER_DEAD` is "explosion, input frozen", which leaves open
+  whether the world keeps moving. It does not: `state_player_dead()` draws the fleet
+  without stepping it, so the march, the enemy fire and the shells already in the air all
+  stop for 90 frames. User's call, on the arcade reading. The alternative — a fleet that
+  keeps marching while the ship is dying — also makes the fleet able to land during the
+  pause, which would need `fleet_landed()` checked in a second place.
+- **2026-08-17 — Landing is read before the hit, and both are read after drawing.**
+  `MISSION.md` §3 makes the fleet reaching the player's row an instant game over
+  "regardless of remaining lives", so on a frame that is both a landing and a hit the
+  landing has to win; `state_playing()` therefore tests `fleet_landed()` first and only
+  falls through to `player_hit()`. What is *testable* is the weaker half — a landing with
+  three lives in hand still ends the game, which `scenario_fleet_landing` checks. Forcing
+  both onto one frame would mean placing a shell as precisely as the fleet, and a scenario
+  that manufactures its own collision proves the probe works rather than the game.
+- **2026-08-17 — Enemy shells are a fixed pool of three, filled in `BOOT()`.** The cap on
+  shots in the air *is* the number of slots, so a list that grows would need the cap
+  enforced separately, and `LINT-RULES.md` L009 keeps table constructors out of the frame
+  path anyway. Yellow against the player's white so the two directions read apart at a
+  glance — confirmed in the framebuffer, 3 px of color 4 against 35 of green.
+- **2026-08-17 — `math.random` is seeded from the clock, and `docs/lua-notes.md` said the
+  opposite.** The note claiming an identical stream in every process was written from
+  three back-to-back runs that agreed byte for byte. They agreed because the seed has
+  roughly one-second granularity: four runs launched simultaneously returned the same
+  five numbers, and two launched two seconds later agreed with each other and differed
+  from those. Six runs spaced three seconds apart gave six different sequences. The doc is
+  corrected and `LINT-RULES.md` L058 now forbids leaning on the stream. `game.lua` is
+  unaffected — it never seeds and never needed to — but a scenario that re-ran a script
+  expecting the same shots had to be rewritten to read the death out of the trace instead.
+- **2026-08-17 — M1's input scenarios run against an emptied fleet.** Since M4 the ship is
+  shot at from frame 50, and walking out of range takes 116 frames at 1 px a frame, so
+  "park at the left edge first" — M3's remedy — no longer works. `clear_at=1` restores
+  exactly the conditions M1 was verified under, before the fleet existed. This was found
+  the hard way: `scenario_hold_fire` reported *no bullet at all* from 300 frames of held
+  fire, because the single `btnp` edge of a held button landed inside a death pause and
+  was swallowed. Every scenario now states the state it is measuring in (L057).
+- **2026-08-17 — The fleet's step schedule is reconstructed state-aware rather than
+  suppressing enemy fire.** The long M2/M3 scenarios now run through real deaths, and the
+  fleet timer stops with the game, so `step_schedule()` ticks only on frames that started
+  `PLAYING` and with something alive. The alternative — a probe knob that stops the fleet
+  firing — would have kept those scenarios testing the M3 game forever, which is the trap
+  `LINT-RULES.md` L056 exists to name. Their lives are held instead, so a run that is
+  meant to measure 8,160 frames of marching is not cut short by a game over.
+- **2026-08-17 — `tools/screendump.py` can wait for a game state instead of a frame
+  number.** The explosion and the game-over screen are the first things worth looking at
+  that no frame count can reach: the fleet's aim is random, so the ship dies on a different
+  frame every run. `--state` dumps the first frame the given state both entered and
+  finished — both sides of `TIC()`, because `game.lua` changes state after it has drawn,
+  and reading it only at the end dumped the *living* ship on the frame it was hit.
 - **2026-08-17 — An emptied fleet holds still; it does not clear the wave.** The M2 note
   above expected M3 to handle the empty fleet "as a wave-clear rather than as a nil check",
   and this does neither: `update_fleet()` returns early when `count` is 0, so the fleet
@@ -353,6 +414,14 @@ recorded in `docs/tic80-api.md` **before its first use**.
   `poke4`, `rect`, `spr`. Collision, scoring and the step curve are arithmetic over state
   the cart already had, and M3 draws nothing new — the score stays out of the framebuffer
   until M7's HUD (§3), which is also when `print` gets re-verified.
+- M4 added no TIC-80 call either, 2026-08-17, checked the same mechanical way: the L011
+  `_ENV` list is unchanged for the third milestone running — `BOOT`, `TIC`, `btn`, `btnp`,
+  `cls`, `game`, `ipairs`, `math`, `poke4`, `rect`, `spr`. Enemy fire, death, lives and
+  both game-over paths are arithmetic and state over the same eleven names; the shells are
+  `rect` and the explosion is `spr`, both signatures already recorded. The one new *Lua*
+  call is `math.random`, which lives under `math` and belongs in `docs/lua-notes.md` — it
+  is recorded there, including a `DISCREPANCY:` correcting this session's own first
+  answer about seeding (§3).
 - The `btnp` entry carries a `DISCREPANCY:` marker per `AGENTS.md` §4.3 — not between
   the docs and the console, but between the console and RAM: `btnp` ignores writes to
   the GAMEPADS region. It is the reason `tools/inputsim.py` supplies its own.
@@ -361,13 +430,15 @@ recorded in `docs/tic80-api.md` **before its first use**.
 
 ## 5. Known bugs
 
-None reproducible as of 2026-08-17. All eleven M1–M3 scenarios in `tools/inputsim.py`
+None reproducible as of 2026-08-17. All seventeen M1–M4 scenarios in `tools/inputsim.py`
 pass, and every framebuffer dump matches its milestone's acceptance criteria.
 
-One limit worth stating rather than filing as a bug: with M3 the fleet can be shot down but
-still cannot land, shoot back, or end the game, so a long enough run walks the fleet down
-past the player and off the bottom of the screen. That is M4's scope (`MISSION.md` §3, §8),
-not a defect in M3.
+M3's note here — that the fleet could march off the bottom of the screen because nothing
+could end the game — is closed: the fleet reaching the player's row is now a game over.
+
+One limit worth stating rather than filing as a bug: `GAME_OVER` has no way out. Nothing
+restarts, and the cart sits on the last frame it drew until it is reloaded. The title
+screen, the restart and the wave transition are all M7's (`MISSION.md` §8).
 
 ---
 
@@ -377,6 +448,15 @@ Per `AGENTS.md` §4.5: state the question, implement around it under a clearly s
 assumption, and record the assumption here. Mark answered ones `RESOLVED:` with the
 answer and its source; do not delete them.
 
+- **OPEN: Is a shell every 25 frames the right amount of pressure, and 90 frames the
+  right death pause?** Both are reasoned rather than played. 25 is the number at which
+  `MISSION.md` §3's cap of three concurrent shells stops being dead code (§3 above), not a
+  number anyone has felt; what is measured is that a ship left standing under the fleet
+  dies about every 400 frames, which spends three lives in well under a minute. The pause
+  is 90 frames because the arcade freezes on death and 1.5 s reads as a beat rather than a
+  hitch — but it is 90 frames during which the fleet does not march, and whether that
+  feels like weight or like a stall is a question only playing it settles. Both are named
+  constants (`ENEMY_FIRE_FRAMES`, `PLAYER_DEAD_FRAMES`), so either is a one-line change.
 - **OPEN: Does the console's own `btnp` hold to one shot per press, under a real
   finger?** Assumed **yes**, on the wiki's documented semantics — `btnp(id)` with `hold`
   and `period` omitted returns true only on the frame a button becomes pressed, and

@@ -13,12 +13,15 @@ y * 240 + x (docs/tic80-ram.md).
 
 A frame can be dumped mid-action rather than at rest: --hold writes a gamepad mask to
 RAM every frame (see tools/inputsim.py for what that does and does not simulate), and
---frames picks how many frames run before the dump.
+--frames picks how many frames run before the dump. --state waits for a game state on top
+of that, for screens that no frame number can be counted to - the console seeds
+math.random from the clock, so the ship dies on a different frame every run.
 
 Usage:
     python3 tools/screendump.py                       # render the occupied region
     python3 tools/screendump.py --raw out             # also write the nibble grid
     python3 tools/screendump.py --hold 16 --frames 20 # dump frame 20 with A held
+    python3 tools/screendump.py --state PLAYER_DEAD   # dump the first frame of a death
 """
 
 import os
@@ -36,12 +39,17 @@ def arg(name, default):
     return int(sys.argv[sys.argv.index(name) + 1]) if name in sys.argv else default
 
 
-def capture(hold, frames):
+def word(name, default):
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
+
+
+def capture(hold, frames, state):
     """Run the probe cart headlessly and return the raw console output."""
     os.makedirs(os.path.join(ROOT, "scratch"), exist_ok=True)
     probe = open(os.path.join(ROOT, "tools", "vram-probe.lua"), encoding="utf-8").read()
     probe = re.sub(r"local PROBE_HOLD = \d+", f"local PROBE_HOLD = {hold}", probe)
     probe = re.sub(r"local PROBE_WARMUP = \d+", f"local PROBE_WARMUP = {frames}", probe)
+    probe = re.sub(r'local PROBE_STATE = ""', f'local PROBE_STATE = "{state}"', probe)
     src = os.path.join(ROOT, "scratch", "probe.lua")
     with open(src, "w", encoding="utf-8") as f:
         f.write(open(os.path.join(ROOT, "game.lua"), encoding="utf-8").read())
@@ -106,9 +114,10 @@ def report(rows):
 
 
 def main():
-    hold, frames = arg("--hold", 0), arg("--frames", 2)
-    print(f"gamepad mask {hold} held, dumping frame {frames}\n")
-    rows = parse(capture(hold, frames))
+    hold, frames, state = arg("--hold", 0), arg("--frames", 2), word("--state", "")
+    print(f"gamepad mask {hold} held, dumping frame {frames}"
+          + (f" or the first one in {state} after it" if state else "") + "\n")
+    rows = parse(capture(hold, frames, state))
     if "--raw" in sys.argv:
         path = sys.argv[sys.argv.index("--raw") + 1]
         with open(path, "w", encoding="utf-8") as f:

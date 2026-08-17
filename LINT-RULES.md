@@ -363,6 +363,34 @@ lands on a fleet position that varies with every timing change, so the branch wo
 shipped unexercised. `tools/input-probe.lua` empties the grid on a given frame instead,
 standing in for the shot that kills the last invader.*
 
+### L057 — a scenario asserts the state it believes it is measuring
+Every scenario in `tools/inputsim.py` assumes a game state throughout: that the ship is
+alive and taking input, or that the run has not ended. That assumption is checked
+(`stayed_playing()`, `outlived_the_threat()`) rather than left implicit. **Read.**
+
+*Added 2026-08-17 during M4, when the fleet learned to shoot. Seven M1-M3 scenarios were
+written against a screen where nothing could hurt the ship, and every one of them was
+still measuring positions and counts after the ship had been shot and frozen for 90
+frames. They did not fail where the change was: `scenario_hold_fire` reported zero bullets
+from 300 frames of held fire, because the one `btnp` edge of a held button fell inside a
+death pause and was swallowed - which reads exactly like a regression in the fire rule
+that M1 closed. `PROGRESS.md` §3 predicted this class of failure at the end of M3 and it
+still cost a debugging pass. The cheap guard is one assertion per scenario, which names
+the real cause on the first line of output.*
+
+### L058 — nothing in `tools/` may depend on the console's random stream
+No scenario may re-run a script expecting the same shots, assert on the frame something
+happened, or hardcode which column fired. Read the rule out of the trace instead - grid
+alignment, cadence, bottom-most-in-column - over whatever the fleet did that run. **Read.**
+
+*Added 2026-08-17 during M4. `docs/lua-notes.md`'s note that the console never seeds
+`math.random` was measured from three back-to-back runs that agreed byte for byte, and was
+wrong: TIC-80 seeds from the clock at roughly one-second granularity, so runs fast enough
+to share a second share a stream and anything slower does not (`docs/lua-notes.md`, six
+runs, six sequences). A scenario built on the false version passed once and then failed
+against a stream it had not seen. Determinism is a property to measure across processes
+and across seconds, not across a loop.*
+
 ## Extending these rules
 
 **This file is expected to grow.** It is a record of mistakes worth not repeating, so

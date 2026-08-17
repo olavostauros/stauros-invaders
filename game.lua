@@ -8,8 +8,11 @@
 -- constants
 
 local SCREEN_W = 240
+local SCREEN_H = 136
 
 local C_BLACK = 0
+local C_RED = 2
+local C_YELLOW = 4
 local C_GREEN = 5
 local C_WHITE = 12
 
@@ -25,6 +28,7 @@ local SPR_PLAYER = 0
 local SPR_INVADER_TOP = 1
 local SPR_INVADER_MID = 3
 local SPR_INVADER_LOW = 5
+local SPR_PLAYER_EXPLODE = 7
 
 -- A tile is 32 bytes of 4-bit pixels and poke4 addresses nibbles, so tile RAM at byte
 -- 0x4000 is nibble 0x8000 and each tile spans 64 nibbles in row-major order.
@@ -37,10 +41,20 @@ local PLAYER_X_MIN = 0
 local PLAYER_X_MAX = SCREEN_W - SPRITE_W
 local PLAYER_START_X = math.floor((SCREEN_W - SPRITE_W) / 2)
 local PLAYER_MUZZLE_X = 3
+local PLAYER_LIVES = 3
+local PLAYER_DEAD_FRAMES = 90
+local PLAYER_EXPLODE_FRAMES = 8
 
 local BULLET_W = 1
 local BULLET_H = 3
 local BULLET_SPEED = 2
+
+local ENEMY_BULLET_W = 1
+local ENEMY_BULLET_H = 3
+local ENEMY_BULLET_SPEED = 2
+local ENEMY_BULLET_MAX = 3
+local ENEMY_FIRE_FRAMES = 25
+local ENEMY_MUZZLE_X = 3
 
 local FLEET_COLS = 11
 local FLEET_ROWS = 5
@@ -52,6 +66,10 @@ local FLEET_START_X = math.floor((SCREEN_W - FLEET_WIDTH) / 2)
 local FLEET_START_Y = 20
 local FLEET_STEP_X = 2
 local FLEET_DROP_Y = 6
+-- The fleet has landed once an invader's bottom edge reaches the ship's top edge, which
+-- is a row earlier than the two boxes would overlap: arriving at the player's row is the
+-- loss, not touching the player.
+local FLEET_LANDING_Y = PLAYER_Y - SPRITE_H
 -- The arcade moved one invader per frame, so a full fleet of 55 stepped once every 55
 -- frames and the last survivor roughly once every two.
 local FLEET_STEP_FRAMES_MAX = 55
@@ -174,6 +192,34 @@ local SPRITE_SHEET = {
       "#.#..#.#",
     },
   },
+  {
+    id = SPR_PLAYER_EXPLODE,
+    color = C_RED,
+    rows = {
+      "..#.#...",
+      "#..#..#.",
+      ".#.###..",
+      "#.#####.",
+      ".#####.#",
+      "#.###.#.",
+      "..#.#..#",
+      ".#...#..",
+    },
+  },
+  {
+    id = SPR_PLAYER_EXPLODE + 1,
+    color = C_RED,
+    rows = {
+      "#..#...#",
+      "..#..#..",
+      "#.#...#.",
+      "...##..#",
+      "#..#.#..",
+      ".#...#.#",
+      "#..#..#.",
+      ".#...#..",
+    },
+  },
 }
 
 -- state
@@ -189,8 +235,13 @@ local STATE = {
 game = {
   state = STATE.PLAYING,
   score = 0,
+  lives = PLAYER_LIVES,
+  death_timer = 0,
   player = { x = PLAYER_START_X, y = PLAYER_Y },
   bullet = { x = 0, y = 0, active = false },
+  -- A fixed pool filled in BOOT() rather than a list that grows: the cap on shots in the
+  -- air is the number of slots, and nothing allocates while the game is running.
+  enemy_bullets = {},
   -- x, y locate row 1 column 1; the fleet is rigid, so every invader's position derives
   -- from that origin. alive is indexed [row][col] and filled in BOOT(); count is what the
   -- step interval reads, so it is kept rather than recounted every frame.
@@ -200,6 +251,7 @@ game = {
     dir = 1,
     timer = 0,
     frame = 0,
+    fire_timer = 0,
     count = FLEET_COUNT,
     alive = {},
   },
@@ -236,6 +288,19 @@ local function build_fleet()
   end
 end
 
+local function build_enemy_bullets()
+  for slot = 1, ENEMY_BULLET_MAX do
+    game.enemy_bullets[slot] = { x = 0, y = 0, active = false }
+  end
+end
+
+local function clear_bullets()
+  game.bullet.active = false
+  for _, bullet in ipairs(game.enemy_bullets) do
+    bullet.active = false
+  end
+end
+
 -- entity update
 
 local function fire()
@@ -262,6 +327,56 @@ local function update_bullet()
   if not bullet.active then return end
   bullet.y = bullet.y - BULLET_SPEED
   if bullet.y + BULLET_H <= 0 then bullet.active = false end
+end
+
+local function update_enemy_bullets()
+  for _, bullet in ipairs(game.enemy_bullets) do
+    if bullet.active then
+      bullet.y = bullet.y + ENEMY_BULLET_SPEED
+      if bullet.y >= SCREEN_H then bullet.active = false end
+    end
+  end
+end
+
+local function bottom_invader(col)
+  for row = FLEET_ROWS, 1, -1 do
+    if game.fleet.alive[row][col] then return row end
+  end
+  return nil
+end
+
+local function free_enemy_bullet()
+  for _, bullet in ipairs(game.enemy_bullets) do
+    if not bullet.active then return bullet end
+  end
+  return nil
+end
+
+-- A random column rather than a sweep, and the pick walks forward to the next living one
+-- rather than being redrawn: an empty column cannot fire, and rejection sampling has no
+-- bound on how long it looks.
+local function firing_column()
+  local pick = math.random(FLEET_COLS)
+  for offset = 0, FLEET_COLS - 1 do
+    local col = (pick + offset - 1) % FLEET_COLS + 1
+    local row = bottom_invader(col)
+    if row then return col, row end
+  end
+  return nil
+end
+
+local function enemy_fire()
+  local fleet = game.fleet
+  if fleet.count == 0 then return end
+  fleet.fire_timer = fleet.fire_timer + 1
+  if fleet.fire_timer < ENEMY_FIRE_FRAMES then return end
+  local bullet = free_enemy_bullet()
+  if not bullet then return end
+  local col, row = firing_column()
+  bullet.x = fleet.x + (col - 1) * FLEET_COL_SPACING + ENEMY_MUZZLE_X
+  bullet.y = fleet.y + (row - 1) * FLEET_ROW_SPACING + SPRITE_H
+  bullet.active = true
+  fleet.fire_timer = 0
 end
 
 -- Edges follow the living fleet, not the grid: a column that has been emptied must stop
@@ -322,10 +437,25 @@ local function draw_player()
   spr(SPR_PLAYER, game.player.x, game.player.y, C_BLACK, 1, 0, 0, 1, 1)
 end
 
+local function draw_player_explosion()
+  local frame = math.floor(game.death_timer / PLAYER_EXPLODE_FRAMES) % 2
+  spr(SPR_PLAYER_EXPLODE + frame, game.player.x, game.player.y, C_BLACK, 1, 0, 0, 1, 1)
+end
+
 local function draw_bullet()
   local bullet = game.bullet
   if not bullet.active then return end
   rect(bullet.x, bullet.y, BULLET_W, BULLET_H, C_WHITE)
+end
+
+-- Enemy shots are yellow against the player's white so the two directions read apart at a
+-- glance; both are the same 1 x 3 rect.
+local function draw_enemy_bullets()
+  for _, bullet in ipairs(game.enemy_bullets) do
+    if bullet.active then
+      rect(bullet.x, bullet.y, ENEMY_BULLET_W, ENEMY_BULLET_H, C_YELLOW)
+    end
+  end
 end
 
 local function draw_fleet()
@@ -371,17 +501,98 @@ local function collide_bullet_fleet()
   end
 end
 
+local function player_hit()
+  local player = game.player
+  for _, bullet in ipairs(game.enemy_bullets) do
+    if bullet.active and
+       bullet.x < player.x + SPRITE_W and bullet.x + ENEMY_BULLET_W > player.x and
+       bullet.y < player.y + SPRITE_H and bullet.y + ENEMY_BULLET_H > player.y then
+      bullet.active = false
+      return true
+    end
+  end
+  return false
+end
+
+-- The lowest living row, not row 5: a bottom row that has been shot away must not keep the
+-- fleet aloft.
+local function fleet_landed()
+  local fleet = game.fleet
+  for row = FLEET_ROWS, 1, -1 do
+    for col = 1, FLEET_COLS do
+      if fleet.alive[row][col] then
+        return fleet.y + (row - 1) * FLEET_ROW_SPACING >= FLEET_LANDING_Y
+      end
+    end
+  end
+  return false
+end
+
+-- game state machine
+
+local function kill_player()
+  game.lives = game.lives - 1
+  game.death_timer = PLAYER_DEAD_FRAMES
+  game.state = STATE.PLAYER_DEAD
+  -- Shells already in the air would otherwise be waiting on the respawned ship, and the
+  -- player's own shot belongs to the life that just ended.
+  clear_bullets()
+  game.fleet.fire_timer = 0
+end
+
+local function state_playing()
+  update_player()
+  update_bullet()
+  update_enemy_bullets()
+  update_fleet()
+  enemy_fire()
+  collide_bullet_fleet()
+  draw_player()
+  draw_bullet()
+  draw_enemy_bullets()
+  draw_fleet()
+  -- Landing is read first so it wins on a frame that is also a hit: it ends the game
+  -- whatever the life count says.
+  if fleet_landed() then
+    game.state = STATE.GAME_OVER
+  elseif player_hit() then
+    kill_player()
+  end
+end
+
+local function state_player_dead()
+  game.death_timer = game.death_timer - 1
+  if game.death_timer <= 0 then
+    if game.lives > 0 then
+      game.player.x = PLAYER_START_X
+      game.state = STATE.PLAYING
+    else
+      game.state = STATE.GAME_OVER
+    end
+  end
+  draw_player_explosion()
+  draw_fleet()
+end
+
+local function state_game_over()
+  -- A ship is still standing only when the fleet landed on it; running out of lives left
+  -- nothing to draw.
+  if game.lives > 0 then draw_player() end
+  draw_enemy_bullets()
+  draw_fleet()
+end
+
+local STATE_FRAME = {
+  [STATE.PLAYING] = state_playing,
+  [STATE.PLAYER_DEAD] = state_player_dead,
+  [STATE.GAME_OVER] = state_game_over,
+}
+
 -- TIC
 
 function TIC()
   cls(C_BLACK)
-  update_player()
-  update_bullet()
-  update_fleet()
-  collide_bullet_fleet()
-  draw_player()
-  draw_bullet()
-  draw_fleet()
+  STATE_FRAME[game.state]()
 end
 
 -- BOOT
@@ -389,4 +600,5 @@ end
 function BOOT()
   blit_sprite_sheet()
   build_fleet()
+  build_enemy_bullets()
 end
