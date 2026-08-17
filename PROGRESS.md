@@ -19,21 +19,22 @@ Legend: `TODO` · `IN PROGRESS` · `DONE` (verified in-console) · `BLOCKED`
 | M0 | Skeleton — metadata header, `TIC()`, `cls()`, "HELLO", scaffolding | DONE | Verified 2026-08-16: "HELLO" observed on screen via `tools/screendump.py` — 76 px of color 12 at x 105..133, y 64..68, rest of the screen color 0. 60.01 FPS on the host clock. Lint pass clean. |
 | M1 | Player — movement, edge clamp, single bullet | DONE | Verified 2026-08-16 with `tools/inputsim.py`: 1 px/frame both ways, clamped at x 0 and 232, one bullet per press, 6 presses during flight ignored, bullet rises 2 px/frame and frees its slot on frame 60. Ship and bullet observed on screen via `tools/screendump.py`; 60.00 FPS moving and firing. Lint pass clean. The `btnp` caveat below is the one gap. |
 | M2 | Fleet — 5 × 11 grid, stepped march, drop-and-reverse, waddle | DONE | Verified 2026-08-17 with `tools/inputsim.py`: 56 steps in 3,100 frames, every one on a multiple of 55, each a 2 px move along the current direction, the waddle toggling on all 56; two drop-and-reverses, at x 72 and x 0, each +6 px in y with no sideways move. Grid observed via `tools/screendump.py` — 55 invaders at x 36..203, y 20..67, three distinct shapes across the five rows — and again at frame 1050, flush right at x 72..239 and one row lower at y 26. 60.00 FPS with the full fleet, moving and firing. Lint pass clean. |
-| M3 | Combat — bullet kills, scoring, speed-up curve | TODO | |
+| M3 | Combat — bullet kills, scoring, speed-up curve | DONE | Verified 2026-08-17 with `tools/inputsim.py`, eleven scenarios: a shot from the start position kills the bottom-row invader on frame 25 — the frame the two boxes first overlap — for 10 points, thinning only row 5 and freeing the bullet at y 67 rather than at the top of the screen; over 4,000 frames of tap-firing, all 25 kills scored exactly their own row's value, all three values (10/20/30) occurred, and the total matched the survivors; sweeping and firing for 8,160 frames killed 53 of 55, and all 820 fleet steps landed exactly where the living count says they should, the interval falling from 53 frames to 2. A fleet emptied on frame 100 held still for the next 300 frames without erroring. Kills observed on screen via `tools/screendump.py` — after 600 frames of held fire, 47 invaders left with gaps in all five rows. 60.00 FPS console / 60.04 host, moving and firing. Lint pass clean; L056 added. |
 | M4 | Threat — enemy fire, death, lives, game over | TODO | |
 | M5 | Bunkers — cell-grid erosion, per-wave reset | TODO | |
 | M6 | Mystery ship — spawn timing, traversal, bonus | TODO | |
 | M7 | Shell — title, game over, wave transitions, HUD, `pmem`, extra life | TODO | |
 | M8 | Audio and polish — SFX, fleet loop, explosions, perf pass | TODO | |
 
-**Current position:** M2 complete and verified in-console. Nothing is blocked; M3
-(bullet-versus-invader collision, scoring, and the step interval shrinking with the
-living count) is next, and the fleet it inherits is already built for it: `game.fleet`
-carries an `alive[row][col]` grid, edge detection reads the living columns rather than
-the grid's, and `FLEET_STEP_FRAMES` is the one constant the speed-up curve replaces.
-M3 must also decide what happens when the last invader dies — `live_columns()` returns
-nil for an empty fleet and `step_fleet()` would error on it, which cannot happen while
-nothing can die.
+**Current position:** M3 complete and verified in-console. The game is now playable in one
+direction only — the fleet can be shot down and the score climbs, but nothing can hurt the
+player. Nothing is blocked; M4 (enemy fire from the bottom-most invader in each column,
+player death, three lives, game over on the last life and on the fleet landing) is next.
+Two things M4 inherits: `game.fleet.count` is maintained on every kill, so "bottom-most
+living invader in a column" is a scan of the same `alive` grid; and M4 is the milestone
+that brings the second real game state, which is when `TIC()` finally gets the dispatch
+table `MISSION.md` §4 asks for and `game.state` stops being decorative. The empty fleet
+holds still rather than starting a wave (§3 below) — `WAVE_CLEAR` remains M7's.
 
 ---
 
@@ -111,6 +112,59 @@ luac5.4 -p game.lua
 
 Newest first. Record the *why*, not just the *what*.
 
+- **2026-08-17 — An emptied fleet holds still; it does not clear the wave.** The M2 note
+  above expected M3 to handle the empty fleet "as a wave-clear rather than as a nil check",
+  and this does neither: `update_fleet()` returns early when `count` is 0, so the fleet
+  that has nothing left to bound its step simply stops. A `WAVE_CLEAR` state means the
+  dispatch table, a pause timer, a wave counter and a fleet rebuild, all of which
+  `MISSION.md` §8 puts in M7 and §4 defines against a state machine that does not exist
+  yet — building it here to avoid a one-line guard is the speculative abstraction
+  `AGENTS.md` §5 bans. User's call, taken before the work started. The guard is a real
+  branch and is tested: `scenario_empty_fleet` forces it (L056) and watches the fleet sit
+  through six steps it would otherwise have taken.
+- **2026-08-17 — The step interval is a straight line from 55 frames at 55 alive to 2 at
+  1 alive.** `MISSION.md` §3 gives exactly those two endpoints and says "interpolate; tune
+  by playing". Nothing here can play, so anything curvier than the line the endpoints
+  already fix would be invented rather than tuned. `fleet_step_frames()` is
+  `MIN + floor((count - 1) * (MAX - MIN) / (COUNT - 1))`, `math.floor` rather than `//`
+  because L005's grep flags integer division and every hit has to be read by hand.
+  The line through those two endpoints turns out to be the identity — the interval in
+  frames equals the living count for every count from 2 to 55, and 1 alive gives 2 — which
+  is the arcade's own mechanism rather than a coincidence: the original moved one invader
+  per frame, so a fleet of *n* took *n* frames to update. The formula is kept over a bare
+  `count` because the two endpoints are the tunable thing `MISSION.md` §3 names, and
+  changing either should not require rediscovering this. Measured across a real thinning:
+  53 frames a step at 53 alive, 2 at 2 alive, with all 820 steps of the run landing on the
+  frame the formula predicts.
+- **2026-08-17 — A kill shortens the interval on the next frame, not the next step.**
+  `update_fleet()` keeps its `timer >= N` compare while `N` is now recomputed each frame,
+  so a kill that drops the threshold below the timer already accumulated steps
+  immediately. The alternative — latching `N` at the start of each interval — would delay
+  every acceleration by up to a full interval, which at 55 frames is most of a second and
+  is precisely the feedback the criterion calls "visibly accelerates".
+- **2026-08-17 — The score is state, not pixels, until M7.** `MISSION.md` §8's acceptance
+  is "score increments by row value", which `tools/inputsim.py` now checks per kill against
+  `FLEET_ROW_POINTS`. Drawing a bare number would place HUD text that §2 puts in a band
+  with a high score and a life counter, all of it M7's, and it would be moved the moment
+  the rest of the band arrives. User's call, taken before the work started.
+- **2026-08-17 — Collision is a flat 55-box scan, and the bullet cannot tunnel.** Indexing
+  the bullet's position into a row and column would be faster and wrong at the seams: the
+  10 px row pitch leaves a 2 px gap the arithmetic has to special-case. 55 axis-aligned
+  box tests a frame cost nothing measurable — 60.00 FPS with the full fleet, moving and
+  firing. Two facts make the flat scan correct rather than merely cheap: a 1 × 3 bullet
+  cannot overlap two invaders at a 16 px column and 10 px row pitch, so the scan order is
+  free; and the fastest the two can approach is 8 px in a frame (a 6 px fleet drop against
+  a 2 px bullet rise) against an 11 px window in which the boxes overlap, so no drop can
+  carry an invader past a live bullet.
+- **2026-08-17 — Two M1 scenarios re-aimed once the fleet became hittable.** The ship
+  starts at x 116 with its muzzle at 119, directly under fleet column 6, so every shot M1
+  fired from the start position now kills a bottom-row invader on frame 25.
+  `scenario_hold_fire` (which asserts the bullet leaves the *screen*) and
+  `scenario_tap_while_in_flight` (whose bullet now frees its slot early, legitimately
+  allowing a second shot) would both have failed for reasons they are not testing. Both
+  now park at x 0 first, where the fleet does not reach. Worth flagging for M4 and M5:
+  a scenario written against an empty screen quietly changes meaning when something is put
+  in front of the ship, and it fails in the direction of looking like a regression.
 - **2026-08-17 — The fleet turns on the step that would leave the screen, rather than on
   the one after.** `MISSION.md` §3 says the fleet drops and reverses when a live invader
   touches an edge, which leaves open whether the touching step also moves. It does not:
@@ -294,6 +348,11 @@ recorded in `docs/tic80-api.md` **before its first use**.
   L011 `_ENV` list is unchanged from M1 — `BOOT`, `TIC`, `btn`, `btnp`, `cls`, `game`,
   `ipairs`, `math`, `poke4`, `rect`, `spr` — so `docs/tic80-api.md` needed no new entry.
   The fleet is 55 more `spr` calls of a signature already recorded.
+- M3 added no TIC-80 call either, 2026-08-17, checked the same mechanical way: the L011
+  `_ENV` list is still `BOOT`, `TIC`, `btn`, `btnp`, `cls`, `game`, `ipairs`, `math`,
+  `poke4`, `rect`, `spr`. Collision, scoring and the step curve are arithmetic over state
+  the cart already had, and M3 draws nothing new — the score stays out of the framebuffer
+  until M7's HUD (§3), which is also when `print` gets re-verified.
 - The `btnp` entry carries a `DISCREPANCY:` marker per `AGENTS.md` §4.3 — not between
   the docs and the console, but between the console and RAM: `btnp` ignores writes to
   the GAMEPADS region. It is the reason `tools/inputsim.py` supplies its own.
@@ -302,8 +361,13 @@ recorded in `docs/tic80-api.md` **before its first use**.
 
 ## 5. Known bugs
 
-None reproducible as of 2026-08-17. Every M1 and M2 scenario in `tools/inputsim.py`
-passes, and both framebuffer dumps match the milestone's acceptance criteria.
+None reproducible as of 2026-08-17. All eleven M1–M3 scenarios in `tools/inputsim.py`
+pass, and every framebuffer dump matches its milestone's acceptance criteria.
+
+One limit worth stating rather than filing as a bug: with M3 the fleet can be shot down but
+still cannot land, shoot back, or end the game, so a long enough run walks the fleet down
+past the player and off the bottom of the screen. That is M4's scope (`MISSION.md` §3, §8),
+not a defect in M3.
 
 ---
 
@@ -326,9 +390,15 @@ answer and its source; do not delete them.
 - **OPEN: Is a 55-frame step at 55 alive the right opening pace?** It is `MISSION.md`
   §3's suggested value and the arcade's own, so it is the best available answer, but at
   2 px every 0.9 s the fleet takes ~33 s to cross an empty screen and the opening minute
-  is slow. §3 says to tune by playing, and nothing here can play; the constant is
-  `FLEET_STEP_FRAMES`. Revisit when M3's curve makes the *shape* of the ramp visible,
-  since the two tune together.
+  is slow. §3 says to tune by playing, and nothing here can play; the constants are now
+  `FLEET_STEP_FRAMES_MAX` and `FLEET_STEP_FRAMES_MIN`. What M3 added is the shape of the
+  ramp, measured rather than guessed: the interval in frames is the living count itself
+  (§3), so the fleet is still stepping once a second with 50 invaders up and does not reach
+  10 frames a step until 10 remain. Almost all of the acceleration is in the last fifth of
+  a wave, and the opening is therefore exactly as slow as this question feared. If it does
+  drag, the cheap fix is lowering `FLEET_STEP_FRAMES_MAX`, and the next cheapest is bending
+  the interpolation off the straight line, in that order. Still carried: the ramp's shape
+  is now known, but whether it *feels* right is a question only playing it settles.
 - **OPEN: Is 1 px/frame the right ship speed, and 2 px/frame the right bullet?** They
   are `MISSION.md` §3's suggested values, implemented as named constants
   (`PLAYER_SPEED`, `BULLET_SPEED`) so tuning is a one-line change. §3 says to tune by

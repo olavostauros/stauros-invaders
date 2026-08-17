@@ -44,6 +44,7 @@ local BULLET_SPEED = 2
 
 local FLEET_COLS = 11
 local FLEET_ROWS = 5
+local FLEET_COUNT = FLEET_COLS * FLEET_ROWS
 local FLEET_COL_SPACING = 16
 local FLEET_ROW_SPACING = 10
 local FLEET_WIDTH = (FLEET_COLS - 1) * FLEET_COL_SPACING + SPRITE_W
@@ -52,8 +53,9 @@ local FLEET_START_Y = 20
 local FLEET_STEP_X = 2
 local FLEET_DROP_Y = 6
 -- The arcade moved one invader per frame, so a full fleet of 55 stepped once every 55
--- frames. The count-driven curve that shortens this arrives with the kills that drive it.
-local FLEET_STEP_FRAMES = 55
+-- frames and the last survivor roughly once every two.
+local FLEET_STEP_FRAMES_MAX = 55
+local FLEET_STEP_FRAMES_MIN = 2
 
 local FLEET_ROW_SPRITE = {
   SPR_INVADER_TOP,
@@ -61,6 +63,14 @@ local FLEET_ROW_SPRITE = {
   SPR_INVADER_MID,
   SPR_INVADER_LOW,
   SPR_INVADER_LOW,
+}
+
+local FLEET_ROW_POINTS = {
+  30,
+  20,
+  20,
+  10,
+  10,
 }
 
 -- The cart carries no sprite sheet chunk, so the sheet is drawn here and blitted into
@@ -178,16 +188,19 @@ local STATE = {
 
 game = {
   state = STATE.PLAYING,
+  score = 0,
   player = { x = PLAYER_START_X, y = PLAYER_Y },
   bullet = { x = 0, y = 0, active = false },
   -- x, y locate row 1 column 1; the fleet is rigid, so every invader's position derives
-  -- from that origin. alive is indexed [row][col] and filled in BOOT().
+  -- from that origin. alive is indexed [row][col] and filled in BOOT(); count is what the
+  -- step interval reads, so it is kept rather than recounted every frame.
   fleet = {
     x = FLEET_START_X,
     y = FLEET_START_Y,
     dir = 1,
     timer = 0,
     frame = 0,
+    count = FLEET_COUNT,
     alive = {},
   },
 }
@@ -284,10 +297,21 @@ local function step_fleet()
   end
 end
 
+-- A straight line between the two endpoints. The interval has to fall with the living
+-- count rather than with elapsed time, and nothing here can play the game to justify a
+-- curvier shape than the one the two endpoints already fix.
+local function fleet_step_frames()
+  local span = FLEET_STEP_FRAMES_MAX - FLEET_STEP_FRAMES_MIN
+  return FLEET_STEP_FRAMES_MIN +
+         math.floor((game.fleet.count - 1) * span / (FLEET_COUNT - 1))
+end
+
 local function update_fleet()
   local fleet = game.fleet
+  -- An emptied fleet has no living columns to bound its step, so it holds where it is.
+  if fleet.count == 0 then return end
   fleet.timer = fleet.timer + 1
-  if fleet.timer < FLEET_STEP_FRAMES then return end
+  if fleet.timer < fleet_step_frames() then return end
   fleet.timer = 0
   step_fleet()
 end
@@ -317,6 +341,36 @@ local function draw_fleet()
   end
 end
 
+-- collision
+
+local function invader_hit(row, col)
+  local fleet = game.fleet
+  local bullet = game.bullet
+  local x = fleet.x + (col - 1) * FLEET_COL_SPACING
+  local y = fleet.y + (row - 1) * FLEET_ROW_SPACING
+  return bullet.x < x + SPRITE_W and bullet.x + BULLET_W > x and
+         bullet.y < y + SPRITE_H and bullet.y + BULLET_H > y
+end
+
+-- The order of the scan does not matter: a 1 x 3 bullet cannot span two invaders at a
+-- 16 px column pitch or a 10 px row pitch, so at most one cell can match.
+local function collide_bullet_fleet()
+  local bullet = game.bullet
+  if not bullet.active then return end
+  local fleet = game.fleet
+  for row = 1, FLEET_ROWS do
+    for col = 1, FLEET_COLS do
+      if fleet.alive[row][col] and invader_hit(row, col) then
+        fleet.alive[row][col] = false
+        fleet.count = fleet.count - 1
+        game.score = game.score + FLEET_ROW_POINTS[row]
+        bullet.active = false
+        return
+      end
+    end
+  end
+end
+
 -- TIC
 
 function TIC()
@@ -324,6 +378,7 @@ function TIC()
   update_player()
   update_bullet()
   update_fleet()
+  collide_bullet_fleet()
   draw_player()
   draw_bullet()
   draw_fleet()

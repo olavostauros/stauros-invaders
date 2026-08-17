@@ -2,6 +2,7 @@
 -- under test runs unmodified, drives the gamepad, and reports game state per frame.
 
 local PROBE_SCRIPT = {}
+local PROBE_CLEAR = 0
 local PROBE_GAMEPAD = 0x0FF80
 local PROBE_FIRE = 4
 
@@ -18,6 +19,33 @@ local console_btnp = 0
 function btnp(id, hold, period)
   local bit = 1 << id
   return (mask & bit) ~= 0 and (prev_mask & bit) == 0
+end
+
+-- Clearing the fleet through the gamepad would take tens of thousands of frames and land
+-- on a fleet position nothing can reproduce, so the empty-fleet guard is reached by
+-- forcing the state instead. Stands in for the last kill of a wave.
+local function clear_fleet()
+  for row = 1, #game.fleet.alive do
+    local cells = game.fleet.alive[row]
+    for col = 1, #cells do
+      cells[col] = false
+    end
+  end
+  game.fleet.count = 0
+end
+
+-- Per-row counts rather than one total, so a kill can be attributed to the row whose
+-- point value the score is supposed to have gone up by.
+local function row_counts()
+  local out = ""
+  for row = 1, #game.fleet.alive do
+    local n = 0
+    for _, alive in ipairs(game.fleet.alive[row]) do
+      if alive then n = n + 1 end
+    end
+    out = out .. " " .. n
+  end
+  return out
 end
 
 local function mask_at(f)
@@ -43,6 +71,7 @@ function TIC()
   -- reported so a console that ever starts honouring RAM writes here gets noticed and
   -- the btnp substitution above can be retired.
   console_btnp = _btnp(PROBE_FIRE) and 1 or 0
+  if frame == PROBE_CLEAR then clear_fleet() end
   _TIC()
   -- the bullet's y goes negative before it despawns, so liveness is its own field
   -- rather than a sentinel coordinate.
@@ -50,5 +79,5 @@ function TIC()
         (game.bullet.active and 1 or 0) .. " " ..
         game.bullet.y .. " " .. game.bullet.x .. " " .. console_btnp .. " " ..
         game.fleet.x .. " " .. game.fleet.y .. " " .. game.fleet.dir .. " " ..
-        game.fleet.frame .. "]", 12)
+        game.fleet.frame .. " " .. game.score .. row_counts() .. "]", 12)
 end

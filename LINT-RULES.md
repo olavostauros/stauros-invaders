@@ -346,6 +346,23 @@ used `-1` as the no-bullet sentinel and truncated the last frame of every bullet
 flight. The scenario still passed, which is the point — a broken check that passes is
 worse than one that fails.*
 
+### L056 — a probe may force game state, but only to reach a state input cannot
+L053 keeps instrumentation out of the deliverable, and the obvious way around it is a hook
+in `game.lua`. Forcing the state from the probe instead keeps the cart clean — but it is
+also how a scenario quietly starts testing a situation the game can never produce, and then
+passes forever while proving nothing.
+
+So: a probe may write `game` directly only where scripted input cannot reach the state in
+reasonable time, and the scenario says in one line which player action it stands in for.
+Anything reachable by pressing buttons is reached by pressing buttons. **Read.**
+
+*Added 2026-08-17 during M3, for `scenario_empty_fleet`. The empty-fleet guard is a real
+branch — `live_columns()` returns nil with nothing alive and `step_fleet()` would error on
+it — but clearing all 55 invaders through the gamepad takes tens of thousands of frames and
+lands on a fleet position that varies with every timing change, so the branch would have
+shipped unexercised. `tools/input-probe.lua` empties the grid on a given frame instead,
+standing in for the shot that kills the last invader.*
+
 ## Extending these rules
 
 **This file is expected to grow.** It is a record of mistakes worth not repeating, so
