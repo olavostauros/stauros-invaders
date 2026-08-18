@@ -62,6 +62,11 @@ method form, and `table.concat` all run in-console (2026-08-16, `game.lua` and
 Confirmed 2026-08-17 for M4's enemy fire. `math.random` exists in both forms —
 `math.random(m)` for an integer in `1..m` and `math.random()` for a float in `[0,1)`.
 
+The **two-argument form `math.random(m, n)`**, an integer in `m..n`, is also present.
+Confirmed 2026-08-18 for M6's saucer interval: `math.random(900, 1500)` returned 1142 and
+1087 in one run. Recorded separately because the note above listed only the other two forms
+and its silence read as an absence.
+
 **The stream is not reproducible across runs, and a cart must not be written as if it
 were.** Six headless runs of the same cart, spaced three seconds apart, returned six
 different sequences (`3 5 9 4 1`, `6 9 3 7 8`, `8 8 2 5 4`, `11 2 7 3 6`, `8 11 1 1 2`,

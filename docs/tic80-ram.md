@@ -52,6 +52,18 @@ The cart carries only a `CHUNK_CODE` chunk (`pack.py`), so it ships **no sprite 
 2026-08-16: the player sprite blitted this way drew 35 pixels of color 5 in the expected
 shape, read back through `tools/screendump.py`.
 
+The sheet is **16 tiles to a row**, which is what `spr()`'s `w`/`h` composite block is
+laid out against: "left-to-right then top-to-bottom from `id`" (`docs/tic80-api.md`) means
+`w = 2` draws `id` and `id + 1` side by side only while `id % 16 < 15`. An `id` of 15 with
+`w = 2` takes 15 and 16, which are on different rows and 8 pixels apart vertically on the
+sheet but drawn side by side on screen.
+
+Measured 2026-08-18 rather than read, because no page states the row width outright:
+tile 9 was filled with color 2 and tile 10 with color 3, then drawn with
+`spr(9, 0, 0, -1, 1, 0, 0, 2, 1)`. Pixel (0, 0) came back 2, pixel (8, 0) came back 3, and
+pixel (0, 8) came back 0 — the two tiles land horizontally adjacent and nothing bleeds into
+the row below.
+
 ## GAMEPADS — byte `0x0FF80`
 
 4 bytes, one per controller, one bit per button: player 1 is byte `0x0FF80`, bit `n` for

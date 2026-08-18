@@ -29,6 +29,9 @@ local SPR_INVADER_TOP = 1
 local SPR_INVADER_MID = 3
 local SPR_INVADER_LOW = 5
 local SPR_PLAYER_EXPLODE = 7
+-- The saucer is 16 px wide, so it is one composite spr() of two tiles rather than two
+-- calls. The sheet is 16 tiles to a row, so 9 and 10 sit side by side (docs/tic80-ram.md).
+local SPR_UFO = 9
 
 -- A tile is 32 bytes of 4-bit pixels and poke4 addresses nibbles, so tile RAM at byte
 -- 0x4000 is nibble 0x8000 and each tile spans 64 nibbles in row-major order.
@@ -122,6 +125,28 @@ local BUNKER_BLAST = {
   { 1, 0 },
   { 0, -1 },
   { 0, 1 },
+}
+
+-- The lane clears the y 0..7 HUD band the shell draws into and ends 2 px above the fleet's
+-- top row, so a bullet under a living invader dies before it can ever reach the saucer.
+local UFO_Y = 10
+local UFO_TILES = 2
+local UFO_W = SPRITE_W * UFO_TILES
+-- The ship's own speed, so catching the saucer means leading it by the frames a bullet
+-- takes to climb to the lane. Anything slower needs a fractional accumulator, and nothing
+-- else in the file carries one.
+local UFO_SPEED = 1
+local UFO_SPAWN_MIN = 900
+local UFO_SPAWN_MAX = 1500
+-- The arcade stopped sending the saucer once the wave was nearly cleared, so the last
+-- invaders are hunted without a bonus crossing the sky above them.
+local UFO_FLEET_MIN = 8
+
+local UFO_POINTS = {
+  50,
+  100,
+  150,
+  300,
 }
 
 -- The cart carries no sprite sheet chunk, so the sheet is drawn here and blitted into
@@ -253,6 +278,36 @@ local SPRITE_SHEET = {
       ".#...#..",
     },
   },
+  -- The saucer is one 16 x 8 shape split down the middle, so the two halves only read as a
+  -- hull and its legs once spr() draws them adjacent.
+  {
+    id = SPR_UFO,
+    color = C_RED,
+    rows = {
+      ".....###",
+      "...#####",
+      "..######",
+      ".##.##.#",
+      "########",
+      "..###..#",
+      "...##...",
+      "........",
+    },
+  },
+  {
+    id = SPR_UFO + 1,
+    color = C_RED,
+    rows = {
+      "###.....",
+      "#####...",
+      "######..",
+      "#.##.##.",
+      "########",
+      "#..###..",
+      "...##...",
+      "........",
+    },
+  },
 }
 
 -- state
@@ -291,6 +346,12 @@ game = {
     count = FLEET_COUNT,
     alive = {},
   },
+  -- dir doubles as which side the last saucer came from, so the next spawn flips it and
+  -- the sides alternate without a second field; starting at -1 sends the first one in from
+  -- the left. bonus belongs to the saucer rather than to the shot, so it is rolled when it
+  -- enters and read when it dies. The lane never moves, so there is no y for UFO_Y to
+  -- drift away from. timer counts down and holds the interval it was rolled with.
+  ufo = { x = 0, dir = -1, timer = 0, bonus = 0, active = false },
 }
 
 -- helpers
@@ -349,6 +410,15 @@ local function reset_bunkers()
       end
     end
   end
+end
+
+-- Shared by boot and by both ways a saucer can leave, so the interval is the gap between
+-- crossings rather than a count from when the last one started: one shot down early does
+-- not bring the next one forward.
+local function reset_ufo()
+  local ufo = game.ufo
+  ufo.active = false
+  ufo.timer = math.random(UFO_SPAWN_MIN, UFO_SPAWN_MAX)
 end
 
 local function build_enemy_bullets()
@@ -494,6 +564,31 @@ local function update_fleet()
   step_fleet()
 end
 
+-- Entry is a full sprite width outside the screen at both ends, so the saucer slides in
+-- and out rather than appearing and vanishing at the edge.
+local function spawn_ufo()
+  local ufo = game.ufo
+  ufo.dir = -ufo.dir
+  if ufo.dir > 0 then ufo.x = -UFO_W else ufo.x = SCREEN_W end
+  ufo.bonus = UFO_POINTS[math.random(#UFO_POINTS)]
+  ufo.active = true
+end
+
+local function update_ufo()
+  local ufo = game.ufo
+  if ufo.active then
+    ufo.x = ufo.x + ufo.dir * UFO_SPEED
+    if ufo.x >= SCREEN_W or ufo.x + UFO_W <= 0 then reset_ufo() end
+    return
+  end
+  -- The wait does not run down while the fleet is too thin to earn a saucer, so refilling
+  -- the sky costs a full interval rather than releasing one that has been counting all
+  -- along.
+  if game.fleet.count <= UFO_FLEET_MIN then return end
+  ufo.timer = ufo.timer - 1
+  if ufo.timer <= 0 then spawn_ufo() end
+end
+
 -- entity draw
 
 local function draw_player()
@@ -546,6 +641,12 @@ local function draw_fleet()
       end
     end
   end
+end
+
+local function draw_ufo()
+  local ufo = game.ufo
+  if not ufo.active then return end
+  spr(SPR_UFO, ufo.x, UFO_Y, C_BLACK, 1, 0, 0, UFO_TILES, 1)
 end
 
 -- collision
@@ -674,6 +775,21 @@ local function collide_bullet_fleet()
   end
 end
 
+-- The lane and the fleet's rows are disjoint bands, so this cannot steal a kill from
+-- collide_bullet_fleet(); it runs after it because that is the order a rising bullet meets
+-- them.
+local function collide_bullet_ufo()
+  local ufo = game.ufo
+  local bullet = game.bullet
+  if not ufo.active or not bullet.active then return end
+  if bullet.x < ufo.x + UFO_W and bullet.x + BULLET_W > ufo.x and
+     bullet.y < UFO_Y + SPRITE_H and bullet.y + BULLET_H > UFO_Y then
+    game.score = game.score + ufo.bonus
+    bullet.active = false
+    reset_ufo()
+  end
+end
+
 local function player_hit()
   local player = game.player
   for _, bullet in ipairs(game.enemy_bullets) do
@@ -719,10 +835,12 @@ local function state_playing()
   update_enemy_bullets()
   update_fleet()
   enemy_fire()
+  update_ufo()
   -- The shields are read before the fleet: an invader low enough to share a pixel with a
   -- bunker cell has already crushed it, so this never steals a kill.
   collide_bullet_bunkers()
   collide_bullet_fleet()
+  collide_bullet_ufo()
   collide_enemy_bullets_bunkers()
   crush_bunkers()
   draw_player()
@@ -730,6 +848,7 @@ local function state_playing()
   draw_bullet()
   draw_enemy_bullets()
   draw_fleet()
+  draw_ufo()
   -- Landing is read first so it wins on a frame that is also a hit: it ends the game
   -- whatever the life count says.
   if fleet_landed() then
@@ -752,6 +871,7 @@ local function state_player_dead()
   draw_player_explosion()
   draw_bunkers()
   draw_fleet()
+  draw_ufo()
 end
 
 local function state_game_over()
@@ -761,6 +881,7 @@ local function state_game_over()
   draw_bunkers()
   draw_enemy_bullets()
   draw_fleet()
+  draw_ufo()
 end
 
 local STATE_FRAME = {
@@ -784,4 +905,5 @@ function BOOT()
   build_enemy_bullets()
   build_bunkers()
   reset_bunkers()
+  reset_ufo()
 end

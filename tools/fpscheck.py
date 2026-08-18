@@ -17,9 +17,15 @@ The milestone's worst case has to be on screen while it measures, so --hold writ
 gamepad mask to RAM every frame, the same way tools/inputsim.py does. Both samples hold
 the same mask, so the per-frame load is identical and the differential stays valid.
 
+--hold only reaches a worst case made of things a button controls. An entity that
+arrives on a timer - the saucer, which comes 15 to 25 seconds in - can miss both samples
+entirely, so --samples moves the window to where it is on screen. Say in the report which
+window was measured and whether the saucer was up for it.
+
 Usage:
     python3 tools/fpscheck.py
     python3 tools/fpscheck.py --hold 24   # right + fire held throughout
+    python3 tools/fpscheck.py --hold 24 --samples 1200 2400   # with the saucer up
 """
 
 import os
@@ -30,6 +36,15 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHORT, LONG = 300, 1200
+
+
+def samples():
+    """The two sample lengths, so a differential can be taken over a window that contains
+    whatever is being measured."""
+    if "--samples" not in sys.argv:
+        return SHORT, LONG
+    i = sys.argv.index("--samples")
+    return int(sys.argv[i + 1]), int(sys.argv[i + 2])
 
 
 def run(sample, hold):
@@ -69,14 +84,15 @@ def run(sample, hold):
 
 def main():
     hold = int(sys.argv[sys.argv.index("--hold") + 1]) if "--hold" in sys.argv else 0
-    line_s, host_s = run(SHORT, hold)
-    line_l, host_l = run(LONG, hold)
+    short, long = samples()
+    line_s, host_s = run(short, hold)
+    line_l, host_l = run(long, hold)
 
     print(f"gamepad mask {hold} held throughout")
-    print(f"sample {SHORT:5d}: console {line_s}   host {host_s:.2f} s to the trace")
-    print(f"sample {LONG:5d}: console {line_l}   host {host_l:.2f} s to the trace")
+    print(f"sample {short:5d}: console {line_s}   host {host_s:.2f} s to the trace")
+    print(f"sample {long:5d}: console {line_l}   host {host_l:.2f} s to the trace")
 
-    frames, secs = LONG - SHORT, host_l - host_s
+    frames, secs = long - short, host_l - host_s
     print(f"\ndifferential: {frames} extra frames in {secs:.2f} extra wall-clock "
           f"seconds -> {frames / secs:.2f} FPS")
 

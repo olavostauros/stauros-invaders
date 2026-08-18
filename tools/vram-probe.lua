@@ -4,13 +4,23 @@
 local PROBE_HOLD = 0
 local PROBE_WARMUP = 2
 local PROBE_STATE = ""
+local PROBE_UFO = 0
+local PROBE_LIVES = 0
 local PROBE_GAMEPAD = 0x0FF80
+-- The saucer's own width and the screen's, repeated here because the cart's constants are
+-- locals this probe cannot see. Only used to hold the dump until it is wholly on screen.
+local PROBE_UFO_W = 16
+local PROBE_SCREEN_W = 240
 
 local _TIC = TIC
 local probe_frames = 0
 
 function TIC()
   poke(PROBE_GAMEPAD, PROBE_HOLD)
+  -- An idle ship spends its three lives somewhere in the first few thousand frames, and a
+  -- game over is a state update_ufo() never runs in, so a dump waiting for the saucer would
+  -- wait past the end of the game. Holding the life count keeps it running until one comes.
+  if PROBE_LIVES > 0 then game.lives = PROBE_LIVES end
   -- What is on screen during a death or a game over cannot be reached by counting frames:
   -- the console seeds math.random from the clock, so the fleet aims somewhere different
   -- every run and the ship dies on a different frame (docs/lua-notes.md). Waiting for the
@@ -24,6 +34,13 @@ function TIC()
   probe_frames = probe_frames + 1
   if probe_frames < PROBE_WARMUP then return end
   if PROBE_STATE ~= "" and (entered ~= PROBE_STATE or game.state ~= PROBE_STATE) then
+    return
+  end
+  -- The saucer arrives 15 to 25 seconds in and crosses in four, so no frame number reaches
+  -- it - the same reason PROBE_STATE exists. Wholly on screen rather than merely present,
+  -- so the pixels dumped are the whole sprite and can be counted against the sheet.
+  if PROBE_UFO == 1 and not (game.ufo.active and game.ufo.x >= 0 and
+                             game.ufo.x + PROBE_UFO_W <= PROBE_SCREEN_W) then
     return
   end
   trace("VRAMBEGIN", 12)

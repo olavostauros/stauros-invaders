@@ -152,6 +152,12 @@ or off by a pixel. It is `LINT-RULES.md` L051.
 Add `--hold <mask> --frames <n>` to dump a frame mid-action instead of at rest — see
 below for what the mask is.
 
+Some frames cannot be counted to. The console seeds `math.random` from the clock, so the
+ship dies on a different frame every run and the mystery ship arrives 15 to 25 seconds in;
+`--state <NAME>` waits for a game state and `--ufo` waits for the saucer to be wholly on
+screen. Both usually want `--lives 3`, which pins the life count so the game does not end
+before the frame you are waiting for arrives.
+
 ### Pressing buttons, without a keyboard
 
 Nothing here can press a key: WSLg takes input from the Windows side, and no injection
@@ -166,6 +172,13 @@ That appends `tools/input-probe.lua` to a copy of `game.lua`, writes the player-
 gamepad byte before each frame, and traces the `game` table afterwards, so behavior is
 read out of the game's own state rather than guessed at. Masks are `1 << button`:
 left is 4, right 8, fire 16, so `--hold 24` is right-plus-fire.
+
+`run()` takes five forcings for states a script cannot reach in reasonable time, each
+standing in for a player action: `clear_at` kills the remaining invaders on a frame, `keep`
+leaves that many standing instead, `fleet_at` teleports the fleet, `lives` holds the life
+count so a long run outlives the threat, and `rush` caps the mystery ship's wait. There is
+deliberately no forcing that spawns one — waiting is reachable, and staging the spawn would
+delete the thing being measured. This is `LINT-RULES.md` L056.
 
 ```
 hold fire for 300 frames
@@ -190,6 +203,10 @@ cross-checks the console's `time()` against the host wall clock, since `time()` 
 would be circular if TIC-80 derived it from the frame counter — it does not. Pass
 `--hold` so it measures the milestone's worst case rather than an idle screen. This is
 `LINT-RULES.md` L052.
+
+`--hold` only reaches things a button controls. For an entity that arrives on a timer, pass
+`--samples <short> <long>` to move the measured window to where it actually is — the default
+300 and 1200 can miss the mystery ship entirely.
 
 ## Linting
 

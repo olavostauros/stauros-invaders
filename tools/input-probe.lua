@@ -5,6 +5,8 @@ local PROBE_SCRIPT = {}
 local PROBE_CLEAR = 0
 local PROBE_FLEET = {}
 local PROBE_LIVES = 0
+local PROBE_KEEP = 0
+local PROBE_RUSH = 0
 local PROBE_GAMEPAD = 0x0FF80
 local PROBE_FIRE = 4
 
@@ -25,15 +27,20 @@ end
 
 -- Clearing the fleet through the gamepad would take tens of thousands of frames and land
 -- on a fleet position nothing can reproduce, so the empty-fleet guard is reached by
--- forcing the state instead. Stands in for the last kill of a wave.
+-- forcing the state instead. Stands in for the last kill of a wave, or with PROBE_KEEP
+-- above zero for the shots that thin one down to its last few. Survivors are taken from
+-- the top row: a fleet of eight steps every eight frames and a bottom-row remnant would
+-- walk itself onto the player's row before a long scenario finished.
 local function clear_fleet()
+  local left = PROBE_KEEP
   for row = 1, #game.fleet.alive do
     local cells = game.fleet.alive[row]
     for col = 1, #cells do
-      cells[col] = false
+      cells[col] = left > 0
+      if left > 0 then left = left - 1 end
     end
   end
-  game.fleet.count = 0
+  game.fleet.count = PROBE_KEEP - left
 end
 
 -- Marching the fleet down to the player's row takes about thirty thousand frames and the
@@ -114,14 +121,30 @@ function TIC()
   -- scenario that has to outlive the fleet rather than the threat keeps its lives topped up.
   -- Death, the explosion and the respawn all still run; only the game over never arrives.
   if PROBE_LIVES > 0 then game.lives = PROBE_LIVES end
+  -- Watching eight saucers cross at the real interval is four minutes of play. The wait
+  -- between them is compressed here and nothing else is: the crossing, the side, the bonus
+  -- and the collision all stay the game's own. Stands in for the minutes a player spends
+  -- between saucers.
+  --
+  -- Clamped before the cart runs, not after, so the interval the cart rolled is still the
+  -- one traced on the frame it was rolled. Clamping afterwards would overwrite every roll
+  -- with PROBE_RUSH and leave nothing to check the 15-to-25-second band against.
+  if PROBE_RUSH > 0 and game.ufo.timer > PROBE_RUSH then
+    game.ufo.timer = PROBE_RUSH
+  end
   _TIC()
   -- the bullet's y goes negative before it despawns, so liveness is its own field
-  -- rather than a sentinel coordinate.
+  -- rather than a sentinel coordinate. The saucer's x is off screen at both ends of every
+  -- crossing for the same reason. Its bonus is traced rather than only the score: a saucer
+  -- nobody shoots still carries a value, and that value is what shows the roll happened
+  -- when it entered rather than when it was hit.
   trace("[" .. frame .. " " .. mask .. " " .. game.player.x .. " " ..
         (game.bullet.active and 1 or 0) .. " " ..
         game.bullet.y .. " " .. game.bullet.x .. " " .. console_btnp .. " " ..
         game.fleet.x .. " " .. game.fleet.y .. " " .. game.fleet.dir .. " " ..
         game.fleet.frame .. " " .. game.score .. row_masks() .. " " ..
         game.state .. " " .. game.lives .. " " .. game.death_timer ..
-        enemy_bullets() .. bunker_masks() .. "]", 12)
+        enemy_bullets() .. bunker_masks() .. " " ..
+        (game.ufo.active and 1 or 0) .. " " .. game.ufo.x .. " " .. game.ufo.dir ..
+        " " .. game.ufo.bonus .. " " .. game.ufo.timer .. "]", 12)
 end

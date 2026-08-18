@@ -61,6 +61,24 @@ BUNKER_SHAPE = ("..#######..", ".#########.", "###########", "###########",
                 "###########", "###########", "####...####", "###.....###")
 BUNKER_FULL = sum(row.count("#") for row in BUNKER_SHAPE)
 
+UFO_Y, UFO_TILES = 10, 2
+UFO_W = SPRITE_W * UFO_TILES
+UFO_SPEED = 1
+UFO_SPAWN_MIN, UFO_SPAWN_MAX = 900, 1500
+UFO_FLEET_MIN = 8
+UFO_POINTS = (50, 100, 150, 300)
+# A crossing enters and leaves a full sprite width off screen, so it is the same length
+# from either side: SCREEN_W + UFO_W frames at UFO_SPEED px each.
+UFO_LIFE = (SCREEN_W + UFO_W) // UFO_SPEED
+UFO_ENTRY = {1: -UFO_W, -1: SCREEN_W}
+# What the rush forcing clamps the wait to. Long enough that the sky is empty between
+# crossings, short enough that eight of them fit in a scenario.
+UFO_RUSH = 30
+# The bullet is up for 59 frames and fire() refuses while it is, so a press every 60 frames
+# is the fastest a script can shoot - and one segment per shot rather than per frame, which
+# is what keeps a long firing run inside the cart's single-bank limit. Measured 2026-08-18.
+SHOT_PERIOD = 60
+
 # game.lua's per-frame trace, in order, each field beside the pattern that matches it.
 # One list rather than a name tuple next to a regex literal: the two could drift, and when
 # M4 added fields to the probe they did - the regex still ended at r5 and every scenario
@@ -75,7 +93,8 @@ TRACE = (
     + tuple(field for slot in range(1, ENEMY_BULLET_MAX + 1)
             for field in ((f"e{slot}", FLAG), (f"e{slot}x", NUM), (f"e{slot}y", NUM)))
     + tuple((f"b{b}r{row}", NUM) for b in range(1, BUNKER_COUNT + 1)
-            for row in range(1, BUNKER_ROWS + 1)))
+            for row in range(1, BUNKER_ROWS + 1))
+    + (("ufo", FLAG), ("ufox", NUM), ("ufod", NUM), ("ufob", NUM), ("ufot", NUM)))
 
 FIELDS = tuple(name for name, _ in TRACE)
 FRAME_RE = re.compile(r"\[" + " ".join(f"({pat})" for _, pat in TRACE) + r"\]")
@@ -176,6 +195,91 @@ def fires_through_a_gap(name, x):
                  f"{BUNKER_X[hit - 1]}..{BUNKER_X[hit - 1] + BUNKER_W - 1}")
 
 
+def ufo_flights(frames):
+    """The frames of each saucer's crossing, and the frame it was gone on (None if the run
+    ended mid-crossing).
+
+    A crossing is a run of frames with the liveness flag set. The flag is a field of its own
+    because the saucer's x is legitimately off screen at both ends of every crossing, so no
+    coordinate could have stood in for "gone" (LINT-RULES.md L055)."""
+    out, live = [], []
+    for fr in frames:
+        if fr["ufo"]:
+            live.append(fr)
+        elif live:
+            out.append((live, fr))
+            live = []
+    if live:
+        out.append((live, None))
+    return out
+
+
+def left_the_lane(last):
+    """update_ufo()'s own despawn test, mirrored: whether the saucer's next step would have
+    carried it off screen. This is what separates a crossing that finished from one a
+    bullet ended, and neither is readable from the liveness flag alone."""
+    nxt = last["ufox"] + last["ufod"] * UFO_SPEED
+    return nxt >= SCREEN_W or nxt + UFO_W <= 0
+
+
+def ufo_kills(frames):
+    """(the frame it died on, the last frame it was up, the bonus it was carrying) for every
+    saucer a player bullet took: a crossing that ended somewhere the lane did not."""
+    return [(gone, live[-1], live[-1]["ufob"])
+            for live, gone in ufo_flights(frames)
+            if gone is not None and not left_the_lane(live[-1])]
+
+
+def playing_between(a, b, frames):
+    """PLAYING frames in (a, b]. The saucer's wait only ticks inside state_playing, so this
+    is the clock its interval is measured on - not the frame number, which both the death
+    pause and the saucer's own freeze stretch."""
+    return sum(1 for fr in frames
+               if a["f"] < fr["f"] <= b["f"] and fr["state"] == "PLAYING")
+
+
+def played(frames):
+    return sum(1 for fr in frames if fr["state"] == "PLAYING")
+
+
+def fleet_blocks(frame, x):
+    """Whether a living invader's box covers muzzle `x` on this frame."""
+    for row in range(1, FLEET_ROWS + 1):
+        for col in columns(frame[ROWS[row - 1]]):
+            ix = frame["fx"] + (col - 1) * FLEET_COL_SPACING
+            if ix <= x < ix + SPRITE_W:
+                return True
+    return False
+
+
+def fires_into_the_lane(name, frames, x):
+    """L059 one level up, and the half fires_through_a_gap() cannot cover. The shields never
+    move, so a muzzle either clears them or does not; the fleet sweeps every column of the
+    screen over a wave, so no aim at the saucer is permanently clear. The assertion is
+    therefore not that the column is always open - none is - but that it was open for most
+    of the run, which is what makes a run that never hit a saucer evidence about the saucer
+    rather than about the fleet."""
+    clear = sum(1 for fr in frames
+                if fr["state"] == "PLAYING" and not fleet_blocks(fr, x))
+    live = played(frames)
+    return check(f"{name} has a clear column up to the lane for most of the run",
+                 bool(live) and clear > live // 2,
+                 f"muzzle x {x} stood under no living invader for {clear} of {live} "
+                 f"playing frames")
+
+
+def waited_long_enough(frames):
+    """L057 in time. Every saucer scenario is windowed on playing frames, not wall frames,
+    because the wait stops with the game - so a run starved by an unlucky run of deaths must
+    fail on its premise, naming the real cause, rather than on 'no saucer came'. This is the
+    cheap guard against the RNG-deadline failure PROGRESS.md section 3 records twice."""
+    live = played(frames)
+    return check("the run gave the wait enough playing frames to fire",
+                 live >= UFO_SPAWN_MAX,
+                 f"{live} playing frames of {len(frames)}, against a ceiling of "
+                 f"{UFO_SPAWN_MAX}")
+
+
 def erosions(frames):
     """(frame, bunker, cells that went) for every frame on which a bunker lost cells. A
     cell that comes back is an error, not a finding - nothing restores a shield mid-wave,
@@ -267,21 +371,30 @@ def first_overlap_frame(row):
     raise AssertionError(f"a bullet never reaches row {row}")
 
 
-def run(script, clear_at=0, fleet_at=None, lives=0):
+def run(script, clear_at=0, fleet_at=None, lives=0, keep=0, rush=0):
     """Run game.lua under the probe with `script` as [(frames, mask), ...] and return
     a list of per-frame dicts.
 
-    The three forcings are LINT-RULES.md L056 stand-ins for player actions that take too
-    many frames to script: clear_at kills every remaining invader on that frame (the shot
-    that ends a wave), fleet_at is (frame, x, y) and teleports the fleet (two minutes of
-    marching), and lives holds the life count there every frame so a long run outlives the
-    threat rather than the fleet (a player who never gets hit).
+    The forcings are LINT-RULES.md L056 stand-ins for player actions that take too many
+    frames to script: clear_at kills the remaining invaders on that frame (the shot that
+    ends a wave) and keep leaves that many of them standing instead (the shots that thin a
+    wave to its last few), fleet_at is (frame, x, y) and teleports the fleet (two minutes
+    of marching), lives holds the life count every frame so a long run outlives the threat
+    rather than the fleet (a player who never gets hit), and rush caps the saucer's wait
+    (the minutes a player spends between saucers).
+
+    There is deliberately no forcing that spawns a saucer. Waiting for one is 25 seconds of
+    play at worst, which L056 calls reachable, and MISSION.md's acceptance criterion is
+    that it *appears on a randomized interval* - a knob that staged the spawn would delete
+    the only thing measuring it.
     """
     probe = open(os.path.join(ROOT, "tools", "input-probe.lua"), encoding="utf-8").read()
     table = "{" + ",".join(f"{{{n},{m}}}" for n, m in script) + "}"
     probe = re.sub(r"local PROBE_SCRIPT = \{\}", f"local PROBE_SCRIPT = {table}", probe)
     probe = re.sub(r"local PROBE_CLEAR = 0", f"local PROBE_CLEAR = {clear_at}", probe)
     probe = re.sub(r"local PROBE_LIVES = 0", f"local PROBE_LIVES = {lives}", probe)
+    probe = re.sub(r"local PROBE_KEEP = 0", f"local PROBE_KEEP = {keep}", probe)
+    probe = re.sub(r"local PROBE_RUSH = 0", f"local PROBE_RUSH = {rush}", probe)
     if fleet_at:
         probe = re.sub(r"local PROBE_FLEET = \{\}",
                        "local PROBE_FLEET = {%d,%d,%d}" % fleet_at, probe)
@@ -605,13 +718,25 @@ def scenario_kill_bottom_row():
 
 def scenario_score_by_row():
     """MISSION.md's 'score increments by row value', checked per kill rather than in
-    aggregate: every drop in a row's population must move the score by that row's value."""
+    aggregate: every drop in a row's population must move the score by that row's value.
+
+    The score is no longer the fleet's alone. This run is long enough to see saucers and
+    its bullets reach the lane once the middle columns are emptied, so the bonuses are read
+    out of the trace and added to what the survivors account for. Subtracting them from the
+    run instead - by shortening it, or by keeping the fleet thin enough to suppress the
+    saucer - would have kept this scenario testing the M3 game forever, which is the trap
+    L056 exists to name."""
     frames = run([(1, FIRE), (9, IDLE)] * 400, lives=PLAYER_LIVES)
     struck = kills(frames)
+    bonus = sum(b for _, _, b in ufo_kills(frames))
     print(f"\ntap fire every 10 frames for {len(frames)} frames, watching the score")
 
+    # A bullet spent on an invader never reaches collide_bullet_ufo(), so no frame can
+    # carry both - but the kill frames are excluded by name rather than by that argument.
+    shot_down = {fr["f"] for fr, _, _ in ufo_kills(frames)}
     wrong = [(fr["f"], row, delta) for fr, row, cols, delta in struck
-             if len(cols) != 1 or delta != FLEET_ROW_POINTS[row - 1]]
+             if fr["f"] not in shot_down
+             and (len(cols) != 1 or delta != FLEET_ROW_POINTS[row - 1])]
     awarded = sorted({delta for _, _, _, delta in struck})
     ok = check("every kill scores exactly its row's value", struck and not wrong,
                f"{len(struck)} kills, values awarded {awarded}"
@@ -622,9 +747,13 @@ def scenario_score_by_row():
     last = frames[-1]
     left = [row_count(last, row) for row in range(1, FLEET_ROWS + 1)]
     expected = sum((FLEET_COLS - n) * FLEET_ROW_POINTS[i] for i, n in enumerate(left))
-    ok &= check("the total is the sum of what died", last["score"] == expected,
-                f"score {last['score']}, rows left {left} = {expected} points of kills")
+    ok &= check("the total is the sum of what died, saucers included",
+                last["score"] == expected + bonus,
+                f"score {last['score']}, rows left {left} = {expected} points of kills "
+                f"plus {bonus} of bonus")
     ok &= fires_through_a_gap("the ship at its start position", START_X + MUZZLE_X)
+    ok &= fires_into_the_lane("the ship at its start position", frames,
+                              START_X + MUZZLE_X)
     ok &= outlived_the_threat(frames)
     return ok
 
@@ -974,11 +1103,14 @@ def scenario_out_of_lives():
                 all(fr["state"] == "GAME_OVER" for fr in over)
                 and over[-1]["f"] == frames[-1]["f"],
                 f"GAME_OVER for the last {len(over)} frames")
+    # The saucer is in this set because state_game_over() draws it without updating it, and
+    # nothing else in the suite would notice an update_ufo() call appearing there.
     ok &= check("nothing moves once the game is over",
                 len({fleet_of(fr) for fr in over}) == 1
                 and len({fr["score"] for fr in over}) == 1
+                and len({(fr["ufox"], fr["ufot"]) for fr in over}) == 1
                 and not any(enemy_flying(fr) for fr in over),
-                f"fleet, score and sky all held for {len(over)} frames")
+                f"fleet, score, saucer and sky all held for {len(over)} frames")
     return ok
 
 
@@ -1268,6 +1400,350 @@ def scenario_fleet_crushes_bunkers():
     return ok
 
 
+def scenario_ufo_appears():
+    """MISSION.md section 3's saucer, crossing the lane above the fleet.
+
+    2,600 frames rather than the interval's 1,500 ceiling because the wait only runs inside
+    state_playing and a ship left standing spends part of a long run frozen; the premise is
+    asserted rather than hoped for. Nothing here leans on the stream: the interval is a
+    bounded uniform, so a window past its ceiling holds a spawn with probability one, not
+    with high probability - which is what separates this from the RNG deadlines PROGRESS.md
+    section 3 records. The fleet is left alive on purpose. An emptied fleet is exactly the
+    condition that suppresses the saucer, so the suite's usual quiet screen is not available
+    to any of these scenarios and the ship is under fire throughout."""
+    frames = run([(2600, LEFT)], lives=PLAYER_LIVES)
+    flights = ufo_flights(frames)
+    print(f"\nwalk to the left edge and watch the sky for {len(frames)} frames")
+
+    ok = waited_long_enough(frames)
+    ok &= check("a saucer crosses the lane", bool(flights),
+                f"{len(flights)} crossing(s) in {played(frames)} playing frames")
+    if not flights:
+        return False
+
+    live, _ = flights[0]
+    first = live[0]
+    ok &= check("the first saucer of a game enters from the left, fully off screen",
+                first["ufod"] == 1 and first["ufox"] == UFO_ENTRY[1],
+                f"entered at x {first['ufox']} heading {first['ufod']:+d}, "
+                f"a full {UFO_W} px sprite outside the screen")
+    ok &= check("the lane clears the HUD band and the fleet",
+                UFO_Y >= 8 and UFO_Y + SPRITE_H <= FLEET_START_Y,
+                f"lane y {UFO_Y}..{UFO_Y + SPRITE_H - 1}, HUD ends at y 7, fleet starts "
+                f"at y {FLEET_START_Y}")
+
+    bonuses = {fr["ufob"] for fr in live}
+    ok &= check("the bonus is rolled when it enters, not per frame and not when it is hit",
+                len(bonuses) == 1 and live[0]["ufob"] in UFO_POINTS,
+                f"carried {live[0]['ufob']} for all {len(live)} frames of the crossing"
+                if len(bonuses) == 1 else f"bonus changed mid-crossing: {sorted(bonuses)}")
+    ok &= check("the wait sits at zero for exactly as long as a saucer is up",
+                all(fr["ufot"] == 0 for fr in live),
+                f"the timer held 0 for all {len(live)} frames it was on screen"
+                if all(fr["ufot"] == 0 for fr in live) else
+                f"timer values seen mid-crossing: {sorted({fr['ufot'] for fr in live})}")
+    ok &= outlived_the_threat(frames)
+    return ok
+
+
+def scenario_ufo_interval():
+    """MISSION.md section 3's "randomized interval (~15-25 seconds)", measured against the
+    console's own clock rather than against frame numbers.
+
+    No rush forcing here: this is the scenario the forcing overrides, so it pays the full
+    wait. The interval is read off the timer where reset_ufo() writes it, which makes the
+    boot roll readable on frame 1 and every later one readable on the frame its crossing
+    ended - a reading per crossing instead of a reading per full cycle. Which values come up
+    is never asserted (L058); that they land in the band, and that the count-down actually
+    drives the spawn, are rules."""
+    frames = run([(3500, LEFT)], lives=PLAYER_LIVES)
+    flights = ufo_flights(frames)
+    print(f"\nwatch the wait run down over {len(frames)} frames, unforced")
+
+    ok = waited_long_enough(frames)
+    # The cart decrements once on frame 1, so the boot roll is one above what frame 1 shows.
+    rolls = [frames[0]["ufot"] + 1] + [gone["ufot"]
+                                       for live, gone in flights if gone is not None]
+    ok &= check("the run collected more than one rolled interval", len(rolls) >= 2,
+                f"{len(rolls)} reading(s): {rolls}")
+    if len(rolls) < 2:
+        return False
+
+    band = [r for r in rolls if not UFO_SPAWN_MIN <= r <= UFO_SPAWN_MAX]
+    ok &= check(f"every interval falls in the {UFO_SPAWN_MIN}..{UFO_SPAWN_MAX} frame band",
+                not band,
+                f"{len(rolls)} readings {rolls}, all within "
+                f"{UFO_SPAWN_MIN / 60:.0f}-{UFO_SPAWN_MAX / 60:.0f} s"
+                if not band else f"out of band: {band}")
+
+    # The wait is a count-down, so it falls by exactly one on every frame that started
+    # PLAYING with an empty sky, and does not move on any other.
+    drift = []
+    for prev, fr in zip(frames, frames[1:]):
+        if prev["ufo"] or fr["ufot"] > prev["ufot"]:
+            continue
+        due = -1 if prev["state"] == "PLAYING" else 0
+        if fr["ufot"] - prev["ufot"] != due:
+            drift.append((fr["f"], prev["ufot"], fr["ufot"], prev["state"]))
+    ok &= check("the wait falls one frame at a time and stops when the game does",
+                not drift,
+                "every step of the count-down accounted for" if not drift else
+                f"{len(drift)} unexplained step(s), first {drift[0]}")
+
+    landed = [(gone["f"], playing_between(gone, nxt[0][0], frames))
+              for (_, gone), nxt in zip(flights, flights[1:]) if gone is not None]
+    wrong = [(f, waited, roll) for (f, waited), roll in zip(landed, rolls[1:])
+             if waited != roll]
+    ok &= check("each saucer arrives on the frame its own count-down reaches zero",
+                not wrong,
+                f"{len(landed)} arrival(s) matched the interval rolled for them"
+                if not wrong else f"first mismatch {wrong[0]}")
+    ok &= outlived_the_threat(frames)
+    return ok
+
+
+def scenario_ufo_crossings():
+    """The three things a crossing has to be: entering from alternating sides, moving at one
+    speed, and leaving the screen rather than stopping on it.
+
+    Eight crossings at the real interval is three minutes of play, which is where the rush
+    forcing earns its place (L056) - it shortens the wait between saucers and touches
+    nothing about the crossings themselves. Every claim is exact rather than statistical:
+    the speed is 1 px a frame and the travel is SCREEN_W + UFO_W, so a crossing is the same
+    length from either side, and the alternation is a flip of a stored direction rather than
+    a draw. The bonus check rides along because the saucers are already here - eight
+    independent one-in-four rolls landing on one value is about six in a hundred thousand,
+    and no particular value is expected (L058)."""
+    frames = run([(2600, LEFT)], lives=PLAYER_LIVES, rush=UFO_RUSH)
+    flights = ufo_flights(frames)
+    done = [(live, gone) for live, gone in flights if gone is not None]
+    print(f"\ncompress the wait to {UFO_RUSH} frames and watch {len(done)} full crossings")
+
+    ok = check("the run saw several complete crossings", len(done) >= 4,
+               f"{len(done)} complete of {len(flights)} started")
+    if len(done) < 4:
+        return False
+
+    dirs = [live[0]["ufod"] for live, _ in flights]
+    want = [1 if i % 2 == 0 else -1 for i in range(len(dirs))]
+    ok &= check("entry sides alternate, starting from the left", dirs == want,
+                f"sides {dirs}" if dirs == want else f"sides {dirs}, expected {want}")
+
+    entries = [(live[0]["ufox"], UFO_ENTRY[live[0]["ufod"]]) for live, _ in flights]
+    ok &= check("every saucer enters a full sprite width off screen",
+                all(got == due for got, due in entries),
+                f"entries at {[e[0] for e in entries]}, from {UFO_ENTRY}")
+
+    # Whether a frame moved the saucer is decided by the state it *started* in, which is the
+    # previous frame's trace: the cart changes state after it has drawn, so the last frame
+    # of a death pause is already reported as PLAYING though state_player_dead ran it. This
+    # is step_schedule()'s convention, and reading it off the frame's own state instead
+    # counts the freeze as a stall in the speed.
+    steps, lengths, spans = set(), [], []
+    for live, _ in done:
+        d = live[0]["ufod"]
+        steps |= {b["ufox"] - a["ufox"] for a, b in zip(live, live[1:])
+                  if a["state"] == "PLAYING"}
+        frozen = sum(1 for a, b in zip(live, live[1:]) if a["state"] != "PLAYING")
+        lengths.append(len(live) - frozen)
+        spans.append((min(fr["ufox"] for fr in live), max(fr["ufox"] for fr in live), d))
+    ok &= check("it moves at one speed and never backwards",
+                steps <= {UFO_SPEED, -UFO_SPEED} and len(steps) <= 2,
+                f"x deltas seen: {sorted(steps)}, against a speed of {UFO_SPEED}")
+    ok &= check(f"every crossing is {UFO_LIFE} moving frames, whichever side it came from",
+                set(lengths) == {UFO_LIFE},
+                f"{len(lengths)} crossings, all {UFO_LIFE} frames of movement, death pauses "
+                f"excluded" if set(lengths) == {UFO_LIFE}
+                else f"lengths seen: {sorted(set(lengths))}")
+
+    short = [sp for sp in spans
+             if (sp[2] > 0 and (sp[0], sp[1]) != (-UFO_W, SCREEN_W - 1))
+             or (sp[2] < 0 and (sp[0], sp[1]) != (-UFO_W + 1, SCREEN_W))]
+    ok &= check("every crossing spans the whole lane, edge to edge", not short,
+                f"x ran {-UFO_W}..{SCREEN_W - 1} rightward and {-UFO_W + 1}..{SCREEN_W} "
+                f"leftward" if not short else f"{len(short)} fell short, first {short[0]}")
+    ok &= check("each one leaves the screen rather than parking on it",
+                all(left_the_lane(live[-1]) for live, _ in done),
+                f"all {len(done)} despawned one step short of off screen")
+
+    awarded = sorted({live[0]["ufob"] for live, _ in flights})
+    ok &= check("the bonus varies, and every value is one of the table's",
+                len(awarded) >= 2 and all(b in UFO_POINTS for b in awarded),
+                f"{len(flights)} saucers carried {awarded}, drawn from {list(UFO_POINTS)}")
+    ok &= outlived_the_threat(frames)
+    return ok
+
+
+def scenario_ufo_shot_down():
+    """MISSION.md section 8's M6 criterion - the saucer awards a bonus when hit.
+
+    The ship parks at the left edge and taps fire. One press per SHOT_PERIOD frames rather
+    than one every other frame: the bullet lives 59 frames and fire() refuses while it is
+    up, so the two produce the same shots, and the script is a Lua table inside the cart -
+    at one segment per press an eight-thousand-frame run of alternating masks does not fit
+    in a bank. Measured, not assumed: eight presses 60 frames apart produced eight bullets.
+
+    x 3 is the aim because the shot has to clear both obstacle sets. Bunker 1 starts at
+    x 19, and of the 37 positions the fleet takes only two put a living column over x 3,
+    which is the smallest exposure any muzzle on the board has. A shot the fleet ate dies at
+    y 19, one frame short of the lane, and is simply a miss.
+
+    Why the run is this long. The bullet is inside the lane's band for 5 frames and the
+    saucer covers the muzzle for 16, so a shot connects if it is fired inside a 20-frame
+    window of a 256-frame crossing: about one shot in three, and about 0.3 per crossing. At
+    the rushed cadence this run is some 30 crossings, so never landing one is a few parts in
+    a hundred thousand. That is a genuine RNG deadline, unlike the spawn, and it is sized
+    off the arithmetic rather than off one lucky run. Which crossing was hit, how many were,
+    and what any of them was worth are all left to the stream (L058)."""
+    walk = START_X - X_MIN
+    frames = run([(walk, LEFT)] + [(1, LEFT | FIRE), (SHOT_PERIOD - 1, LEFT)] * 148,
+                 lives=PLAYER_LIVES, rush=UFO_RUSH)
+    print(f"\npark at the left edge and tap fire at the lane for {len(frames)} frames")
+
+    ok = fires_through_a_gap("the parked ship", X_MIN + MUZZLE_X)
+    ok &= fires_into_the_lane("the parked ship", frames, X_MIN + MUZZLE_X)
+    ok &= check("the run saw enough saucers to be a test of the shooting",
+                len(ufo_flights(frames)) >= 20,
+                f"{len(ufo_flights(frames))} crossings in {played(frames)} playing frames")
+
+    struck = ufo_kills(frames)
+    ok &= check("a player bullet brings a saucer down", bool(struck),
+                f"{len(struck)} saucer(s) shot down of {len(ufo_flights(frames))} crossings")
+    if not struck:
+        return False
+
+    befores = {fr["f"]: prev for fr, prev, _ in struck}
+    wrong = [(fr["f"], fr["score"] - befores[fr["f"]]["score"], bonus)
+             for fr, _, bonus in struck
+             if fr["score"] - befores[fr["f"]]["score"] != bonus]
+    ok &= check("the score rises by the bonus that saucer was carrying", not wrong,
+                f"{len(struck)} kills, each scoring its own "
+                f"{sorted({b for _, _, b in struck})}"
+                if not wrong else f"{len(wrong)} mismatched, first {wrong[0]}")
+    ok &= check("every bonus awarded is one of the table's",
+                all(b in UFO_POINTS for _, _, b in struck),
+                f"awarded {sorted({b for _, _, b in struck})} from {list(UFO_POINTS)}")
+
+    both = [fr["f"] for fr, prev, _ in struck if living(fr) != living(prev)]
+    ok &= check("one bullet takes one target - a saucer kill never also thins the fleet",
+                not both,
+                "the fleet was untouched on every kill frame" if not both else
+                f"frames scoring twice: {both}")
+
+    spent = [fr["f"] for fr, prev, _ in struck if fr["live"] and prev["live"]]
+    ok &= check("the shot is spent on the saucer", not spent,
+                "the bullet freed its slot on every kill frame" if not spent else
+                f"bullet survived its own hit on frames {spent}")
+    ok &= check("a fresh interval is rolled the moment it dies",
+                all(UFO_SPAWN_MIN <= fr["ufot"] <= UFO_SPAWN_MAX for fr, _, _ in struck),
+                f"rolls after a kill: {sorted({fr['ufot'] for fr, _, _ in struck})}")
+    ok &= outlived_the_threat(frames)
+    return ok
+
+
+def scenario_ufo_thin_fleet():
+    """The arcade's own rule, and the one thing about the saucer that never shows on screen:
+    below nine invaders, no more are sent.
+
+    Two runs rather than one, because a single run over an emptied fleet would pass just as
+    well against a guard written `count == 0` - the boundary is the assertion. Thinning a
+    wave to exactly eight through the gamepad takes tens of thousands of frames and lands on
+    a fleet position nothing can reproduce, so the probe leaves that many standing (L056);
+    it stands in for the shots that take a wave down to its last few. Survivors come from
+    the top row so a remnant stepping every eight frames does not walk itself onto the
+    player's row inside the window. Both runs are past the interval's ceiling, so "no saucer
+    came" is a fact rather than a wait that was too short."""
+    quiet = run([(2600, IDLE)], clear_at=1, keep=UFO_FLEET_MIN, lives=PLAYER_LIVES)
+    noisy = run([(2600, IDLE)], clear_at=1, keep=UFO_FLEET_MIN + 1, lives=PLAYER_LIVES)
+    print(f"\nleave {UFO_FLEET_MIN} standing, then {UFO_FLEET_MIN + 1}, and watch the sky")
+
+    ok = waited_long_enough(quiet)
+    ok &= waited_long_enough(noisy)
+    ok &= check(f"{UFO_FLEET_MIN} invaders left is too thin to earn a saucer",
+                not ufo_flights(quiet),
+                f"no crossing in {played(quiet)} playing frames, against a ceiling of "
+                f"{UFO_SPAWN_MAX}"
+                if not ufo_flights(quiet) else
+                f"{len(ufo_flights(quiet))} crossing(s) with only {living(quiet[-1])} up")
+    held = {fr["ufot"] for fr in quiet}
+    ok &= check("the wait does not merely fail to fire, it does not run", len(held) == 1,
+                f"the timer held {held.pop()} for the whole run" if len(held) == 1
+                else f"timer moved through {len(held)} values")
+    ok &= check(f"one more invader is enough", bool(ufo_flights(noisy)),
+                f"{len(ufo_flights(noisy))} crossing(s) with {UFO_FLEET_MIN + 1} up")
+
+    ok &= check("neither fleet drifted across the threshold mid-run",
+                all(living(fr) == UFO_FLEET_MIN for fr in quiet[1:])
+                and all(living(fr) == UFO_FLEET_MIN + 1 for fr in noisy[1:]),
+                f"held at {UFO_FLEET_MIN} and {UFO_FLEET_MIN + 1} for both runs")
+    # Eight invaders still shoot, and a ship that never moves is still hit, so the weaker
+    # guard is the honest one here: dying is expected, reaching a game over is not.
+    ok &= outlived_the_threat(quiet)
+    ok &= outlived_the_threat(noisy)
+    return ok
+
+
+def scenario_ufo_freezes_on_death():
+    """The saucer freezes in place through the death pause exactly as the fleet does, which
+    in the cart is the absence of an update_ufo() call in state_player_dead() rather than
+    anything positive - so it is worth an assertion, because nothing else would notice it
+    being added back.
+
+    Jitter under the fleet, as scenario_player_death does, so the ship is shot repeatedly;
+    with the wait compressed the sky holds a saucer most of the time, so the odds that none
+    of the run's deaths lands during a crossing are negligible. Which death it is, and where
+    the saucer had got to, are read out of the trace (L058) - the assertion is that nothing
+    moved, not where it stopped."""
+    frames = run([(1, LEFT), (1, RIGHT)] * 1400, lives=PLAYER_LIVES, rush=UFO_RUSH)
+    print(f"\njitter under the fleet for {len(frames)} frames and die with a saucer up")
+
+    windows, current = [], []
+    for fr in frames:
+        if fr["state"] == "PLAYER_DEAD":
+            current.append(fr)
+        elif current:
+            windows.append(current)
+            current = []
+    covered = [w for w in windows if w[0]["ufo"]]
+    ok = check("the ship died at least once with a saucer on screen", bool(covered),
+               f"{len(covered)} of {len(windows)} death(s) began with a saucer up")
+    if not covered:
+        return False
+
+    moved = [(w[0]["f"], len({fr["ufox"] for fr in w}))
+             for w in covered if len({fr["ufox"] for fr in w}) != 1]
+    ok &= check("the saucer holds its position for the whole pause", not moved,
+                f"x unchanged across {sum(len(w) for w in covered)} frozen frames"
+                if not moved else f"it moved during {len(moved)} pause(s), first {moved[0]}")
+    ok &= check("it is not despawned by the death, and keeps its bonus",
+                all(fr["ufo"] and fr["ufob"] == w[0]["ufob"] for w in covered for fr in w),
+                f"stayed up carrying {sorted({w[0]['ufob'] for w in covered})} throughout")
+
+    ticked = [(prev["f"], prev["ufot"], fr["ufot"]) for prev, fr in zip(frames, frames[1:])
+              if prev["state"] != "PLAYING" and fr["ufot"] < prev["ufot"]]
+    ok &= check("the wait stops with the game, saucer up or not", not ticked,
+                "the timer never moved outside PLAYING" if not ticked else
+                f"{len(ticked)} tick(s) while frozen, first {ticked[0]}")
+
+    # Completed crossings only - the run ends mid-crossing about half the time, and a
+    # crossing the window cut short is not one the death pause shortened. Frozen frames are
+    # counted by the state their predecessor was traced in, as scenario_ufo_crossings()
+    # explains: the cart flips state after it has drawn.
+    resumed = []
+    for live, gone in ufo_flights(frames):
+        if gone is None:
+            continue
+        frozen = sum(1 for a, b in zip(live, live[1:]) if a["state"] != "PLAYING")
+        if frozen and len(live) - frozen != UFO_LIFE:
+            resumed.append((live[0]["f"], len(live), frozen))
+    ok &= check("a crossing interrupted by a death is exactly that much longer",
+                not resumed,
+                f"every crossing still {UFO_LIFE} moving frames long" if not resumed else
+                f"{len(resumed)} came out wrong, first {resumed[0]}")
+    ok &= outlived_the_threat(frames)
+    return ok
+
+
 def main():
     ok = True
     ok &= scenario_move(LEFT, "left", lambda f: max(X_MIN, START_X - f))
@@ -1292,6 +1768,12 @@ def main():
     ok &= scenario_bunker_erodes_progressively()
     ok &= scenario_shell_erodes_bunker()
     ok &= scenario_fleet_crushes_bunkers()
+    ok &= scenario_ufo_appears()
+    ok &= scenario_ufo_interval()
+    ok &= scenario_ufo_crossings()
+    ok &= scenario_ufo_shot_down()
+    ok &= scenario_ufo_thin_fleet()
+    ok &= scenario_ufo_freezes_on_death()
     print("\nall scenarios passed" if ok else "\nsome scenarios failed")
     sys.exit(0 if ok else 1)
 

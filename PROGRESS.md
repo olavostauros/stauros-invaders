@@ -22,30 +22,42 @@ Legend: `TODO` · `IN PROGRESS` · `DONE` (verified in-console) · `BLOCKED`
 | M3 | Combat — bullet kills, scoring, speed-up curve | DONE | Verified 2026-08-17 with `tools/inputsim.py`, eleven scenarios: a shot from the start position kills the bottom-row invader on frame 25 — the frame the two boxes first overlap — for 10 points, thinning only row 5 and freeing the bullet at y 67 rather than at the top of the screen; over 4,000 frames of tap-firing, all 25 kills scored exactly their own row's value, all three values (10/20/30) occurred, and the total matched the survivors; sweeping and firing for 8,160 frames killed 53 of 55, and all 820 fleet steps landed exactly where the living count says they should, the interval falling from 53 frames to 2. A fleet emptied on frame 100 held still for the next 300 frames without erroring. Kills observed on screen via `tools/screendump.py` — after 600 frames of held fire, 47 invaders left with gaps in all five rows. 60.00 FPS console / 60.04 host, moving and firing. Lint pass clean; L056 added. |
 | M4 | Threat — enemy fire, death, lives, game over | DONE | Verified 2026-08-17 with `tools/inputsim.py`, five new scenarios: over 2,000 frames the fleet fired 76 shells, every uninterrupted gap exactly 25 frames, never more than 2 in the air at once, each falling 2 px/frame from a muzzle that landed on the grid in all eleven columns and freeing its slot by y 136; after a sweep had emptied the bottom of several columns, all 44 shells of a quiet 1,200-frame window came from the bottom-most living invader of their column, across four different rows; a ship jittering under the fleet was hit at x 115 by a shell at (115, 118), lost a life, held for exactly 90 frames of `PLAYER_DEAD` with the timer 90 down to 1, ignored the left/right it was still being given, saw no shell fired at it while dying, and came back at x 116 — the fleet frozen at (48, 20) throughout; three deaths spent three lives and the third ran into `GAME_OVER` 90 frames later, where the fleet, score and sky all stopped for the remaining 2,112 frames; and a fleet placed one drop above the player's row dropped to y 72 and ended the game on that same frame with all three lives still in hand. Observed on screen via `tools/screendump.py`: a yellow shell 1 × 3 px at (167, 98..100), the red explosion 22 px filling the ship's cell at x 116..123, y 120..127 with no green ship and no shells left in the sky, and a game over after the last life with 55 invaders standing and no ship drawn. 60.00 FPS console / 60.48 host differential, moving and firing. Lint pass clean; L057 and L058 added. |
 | M5 | Bunkers — cell-grid erosion, per-wave reset | DONE | Verified 2026-08-17 with `tools/inputsim.py`, five new scenarios: four shields of 74 cells stand at x 19/79/139/199, y 100..115, and nothing erodes one nobody shot at; a shot into bunker 2's arch notch stops inside the band, skips the two dead rows below it and blasts the plus around the *lowest* live cell of its column, leaving the other three shields untouched; ten shots into the same spot drilled a channel — 74 → 70 → 66 → 62 cells, each impact 4 px higher than the last, the fourth flying clean through on frame 250 with 62 of 74 cells still standing, which is "blocks bullets while cells remain" and its converse in one run; 2,500 frames of never firing had 32 shells absorbed for 93 cells, every one stopping between y 96 and 106 and every blast centred on the *highest* live cell of its column, the mirror of the player's erosion; and a fleet placed with its bottom row inside the band erased all 90 cells under it and exactly those — 212 left standing outside the footprint, nothing touched beyond it. Observed on screen via `tools/screendump.py`: four 22 px arches with their legs, 1,219 px of color 5 being exactly 35 of ship plus 4 × 74 × 4 of cell; and after 500 frames of sweeping fire, bunker 3 chewed to fragments and bunker 4's roof bitten open. 60.00 FPS console / 60.47 host differential with 296 cells drawn a frame, moving and firing. All 17 M1–M4 scenarios re-run and passing, and the full 22 ran clean three times end to end — 101 assertions, 0 failures — after two pre-existing RNG-deadline flakes were found and fixed (§3). Lint pass clean; L059 and L060 added. |
-| M6 | Mystery ship — spawn timing, traversal, bonus | TODO | |
+| M6 | Mystery ship — spawn timing, traversal, bonus | DONE | Verified 2026-08-18 with `tools/inputsim.py`, six new scenarios: a saucer crosses the lane at y 10..17, entering at x -16 heading right — the first of a game always from the left — carrying one bonus for all 256 frames of the crossing with the wait held at 0 throughout; over an unforced 3,500 frames three intervals were rolled, 1243, 1210 and 999, every one inside the 900..1500 band, the count-down falling exactly one frame at a time and stopping with the game, and each saucer arriving on the frame its own count reached zero; eight complete crossings alternated sides strictly, entered a full 16 px off screen at both ends, moved only ±1 px a frame, ran 256 moving frames whichever side they came from, spanned x -16..239 and -15..240, left the screen rather than parking on it, and carried all four of 50/100/150/300; a ship parked at the left edge tapping fire for 8,996 frames saw 32 crossings and shot 7 down, each scoring exactly the bonus that saucer was carrying, none of them also thinning the fleet, the bullet spent every time and a fresh in-band interval rolled the moment it died; eight invaders left standing produced no saucer across 2,240 playing frames with the timer held at 1049 and never moving, while nine produced one; and of seven deaths, six began with a saucer up, which held its x, its bonus and its liveness across 540 frozen frames and resumed to a crossing still 256 moving frames long. Observed on screen via `tools/screendump.py`: 66 px of color 2 at x 0..15, y 10..16 — exactly the two tiles' lit pixels from `SPRITE_SHEET` — with the non-black bounding box's top moved from y 20 to y 10, beside 2,200 px of white that is the full 55-invader fleet in waddle frame 1 and 1,015 of green that is 35 of ship plus 245 bunker cells of 4; and during a death, 88 px of red being 66 of saucer plus 22 of explosion, with 568 of green accounting for 142 cells and no ship. 59.99 FPS host differential over frames 1,200..2,400, a window measured to hold a full crossing under the same held mask, console 59.998–60.001. All 22 M1–M5 scenarios re-run and passing, and the full 28 ran clean six times end to end — 148 assertions, 0 failures. Lint pass clean; L016, L052 and L059 amended. |
 | M7 | Shell — title, game over, wave transitions, HUD, `pmem`, extra life | TODO | |
 | M8 | Audio and polish — SFX, fleet loop, explosions, perf pass | TODO | |
 
-**Current position:** M5 complete and verified in-console. Four cell-grid shields stand
-between the fleet and the player, eroded from below by the ship, from above by the fleet,
-and erased outright by an invader standing in one. Nothing is blocked; M6 (the mystery
-ship — spawn timing, traversal, bonus scoring) is next.
+**Current position:** M6 complete and verified in-console. A saucer crosses the lane above
+the fleet every 15 to 25 seconds, entering from alternating sides, carrying a bonus of 50,
+100, 150 or 300 that it hands over when a shot brings it down. Nothing is blocked; M7 (the
+shell — title screen, game over, wave transitions, HUD, `pmem` high score, extra life) is
+next, and it is the largest milestone remaining.
 
-Two halves of M5, and only one of them is closed. The erosion is done and tested from every
-direction `MISSION.md` §3 names. The **per-wave reset is built but undriven**: the shields
-are rebuilt by `reset_bunkers()`, which is split from `build_bunkers()` precisely so a wave
-can refill the grid without allocating mid-frame (L009), but `WAVE_CLEAR` does not exist
-until M7 and `reset_bunkers()` is a `local` the probe cannot reach without instrumenting
-the cart (L053). It is carried as an open question below rather than counted as tested.
+The prediction M5 left about M6 was wrong, and mechanically so. The `_ENV` list was expected
+to gain a name; it is unchanged for the fifth milestone running — `BOOT`, `TIC`, `btn`,
+`btnp`, `cls`, `game`, `ipairs`, `math`, `poke4`, `rect`, `spr`. The saucer draws with a
+`spr` whose signature has been recorded since M1 and picks with `math.random`, so M6 added
+no TIC-80 call at all. L011 was run first rather than last anyway, which is what turned that
+from an assumption into a measurement.
 
-Three things M6 inherits. The `_ENV` global list has now been unchanged for four milestones
-running, which is the mechanical check that no undocumented API call has crept in — M6's UFO
-is the first thing since M1 likely to need a new one, so run L011 early rather than at the
-close. Every scenario that fires now asserts the geometry it is aiming through (L059), so a
-mystery ship crossing the UFO lane will not silently re-aim an existing scenario the way the
-shields nearly did. And `cleared_the_wave()` exists because M5 made the sweeping ship
-survive twice as long: any long scenario M6 adds should expect a wave that now sometimes
-ends itself.
+**Two resets are now built and undriven, not one.** `reset_ufo()` joins `reset_bunkers()`:
+both are split out precisely so a wave can restart without allocating mid-frame (L009), both
+are called from `BOOT()` and verified there, and neither has anything calling it at the
+moment a wave ends, because `WAVE_CLEAR` does not exist until M7. `MISSION.md` §3 requires
+both — shields reset per wave, and no saucer present during a wave transition — so M7's
+transition should assert that the shields come back full after a wave that eroded them, and
+that no saucer is up on the first frame of a new one with a fresh interval rolled.
+
+Three things M7 inherits. **`UFO_FLEET_MIN` is load-bearing in a way its own line does not
+show:** suppressing the saucer below nine invaders also means every `clear_at` scenario in
+the suite is saucer-free for free, which is why M6 disturbed exactly one existing scenario
+out of 22. Anyone who changes that threshold is changing ten scenarios' assumptions, not one
+constant. **`game.score` now has two writers**, so any M7 work touching scoring — the extra
+life at 1,500, the HUD, the `pmem` high score — has to account for a bonus as well as a row
+value; `scenario_score_by_row` shows the shape, reading the bonuses out of the trace and
+adding them to what the survivors account for. And **`state_game_over()` and
+`state_player_dead()` now draw four kinds of entity without updating any of them**, which is
+where the freeze lives: it is the absence of an update call rather than a flag, so M7's new
+states have to be written the same way or the saucer will start moving on the title screen.
 
 ---
 
@@ -122,6 +134,111 @@ luac5.4 -p game.lua
 ## 3. Decisions
 
 Newest first. Record the *why*, not just the *what*.
+
+- **2026-08-18 — The saucer is 16 px of one composite `spr()`, and that is the first thing
+  in the project no lint grep can see.** The width was the user's call, taken before the
+  work started: an 8 px saucer would have read as another invader in a different lane. One
+  `spr(SPR_UFO, x, y, C_BLACK, 1, 0, 0, UFO_TILES, 1)` rather than two calls, which needed a
+  fact no page states outright — the tile sheet is 16 tiles to a row, so ids 9 and 10 are
+  adjacent and `w = 2` consumes them in order. Measured rather than read (tile 9 filled with
+  color 2, tile 10 with color 3, drawn at the origin; pixel (0,0) came back 2, (8,0) came
+  back 3, (0,8) came back 0) and recorded in `docs/tic80-ram.md`. The cost is that **id 10
+  appears in no `spr()` call anywhere**, so L016's grep reports clean whether or not it was
+  ever blitted; the rule is amended and the pass gained a second grep listing composite
+  calls, whose extra ids have to be read by hand.
+- **2026-08-18 — The wait counts down and holds its own interval; it is not a count-up
+  against a stored threshold.** The file had both idioms and the choice was not obvious.
+  `fleet.timer` and `fleet.fire_timer` count *up* because their thresholds live elsewhere
+  and are the same every frame; `death_timer` counts *down* because it is a one-shot whose
+  value is fixed when it starts. The saucer is the second kind, and counting down collapses
+  two fields into one: the rolled interval *is* the timer, so the probe sees the value on
+  the frame it was rolled instead of having to reconstruct it across two spawns. That is
+  what let `scenario_ufo_interval` collect three readings in 3,500 frames rather than the
+  ~7,000 a reading-per-cycle would have needed — and 7,000 frames of a wait that stops
+  during death pauses is exactly the RNG-deadline shape this log records twice.
+- **2026-08-18 — The bonus is rolled when the saucer enters, not when it is hit.** Both
+  score the same. Rolling at entry means the value belongs to *that* saucer, so the probe
+  can trace it and a scenario can assert the score rose by the amount the thing on screen was
+  carrying — identity rather than quantity (L060). Rolling at the hit would leave only "the
+  score went up by something in the table", which cannot tell a correct award from a bonus
+  attached to the wrong event. `MISSION.md` §3's table is read literally, with
+  `math.random(#UFO_POINTS)`; the arcade's real rule keyed the 300 to the player's 23rd shot,
+  and reproducing it was considered and rejected against §1's "feel, not ROM reproduction" —
+  it is carried as an open question below instead.
+- **2026-08-18 — `dir` doubles as the memory of which side the last saucer came from.**
+  `MISSION.md` §3 asks for alternating entry sides, and the flip happens on the way in, so
+  one field carries both the direction of travel and the alternation. Initialising it to -1
+  in the state literal means the first saucer of every game enters from the left, which is
+  deterministic and therefore assertable — a rare thing to get for free in a system this
+  much of which is stream-driven (L058).
+- **2026-08-18 — The saucer freezes during a death rather than despawning, and the freeze is
+  the absence of code.** The user's call. `state_player_dead()` draws it and does not update
+  it, exactly as it treats the fleet, so nothing new was written to make it hold still. The
+  cost is that a player can bank a saucer: die with one at mid-screen and it is still sitting
+  there 90 frames later. The alternative throws away a bonus the player did nothing to lose.
+  Because the behaviour is an absence, it is the kind of thing that comes back silently, so
+  `scenario_ufo_freezes_on_death` asserts it directly and `scenario_out_of_lives` now
+  includes the saucer's x in its "nothing moves once the game is over" set.
+- **2026-08-18 — Below nine invaders no saucer is sent, and that rule is quietly holding ten
+  scenarios up.** The arcade's own, and it stops the bonus exactly when the player most wants
+  it. The accident is worth stating plainly: `count == 0` satisfies `count <= UFO_FLEET_MIN`,
+  so **every `clear_at` scenario in the suite is saucer-free by construction** — which is why
+  a new entity crossing the sky broke exactly one of 22 existing scenarios instead of ten. It
+  also means no saucer scenario can use the suite's standard quiet-screen trick, so all six
+  run with a living fleet, a ship under fire, and `outlived_the_threat()` rather than
+  `stayed_playing()`. The threshold is a one-line change on its face and is not one.
+- **2026-08-18 — No probe knob spawns a saucer; two knobs were added for things buttons
+  genuinely cannot reach.** Forcing a spawn was considered and rejected: L056's test is
+  whether scripted input can reach the state in reasonable time, and 1,500 frames is 25
+  seconds of play and about a second unthrottled. Worse, `MISSION.md` §8's criterion is that
+  the saucer *appears on a randomized interval*, so a knob that staged the spawn would have
+  deleted the only thing measuring it. What was added instead: `rush`, which caps the wait so
+  eight crossings fit in 2,600 frames rather than three minutes, touching nothing about the
+  crossing, the side, the bonus or the collision; and `keep`, generalising `clear_at` to
+  leave N invaders standing, which is what makes the suppression threshold testable at the
+  boundary — eight against nine — rather than only at zero. A placement knob was rejected on
+  the ground `scenario_fleet_landing` already states: a scenario that manufactures its own
+  collision proves the probe works, not the game, and an off-by-one in the box test survives
+  a shot placed dead centre.
+- **2026-08-18 — `rush` clamps the timer *before* the cart runs, not after.** Written the
+  obvious way first, and it silently destroyed what it was meant to leave alone: clamping
+  after `_TIC()` overwrites every rolled interval with the clamp value, so the traced roll is
+  never the cart's own and the 15-to-25-second band has nothing to be checked against.
+  Clamping first leaves the roll visible on the frame it was made. The general shape is worth
+  keeping in view — a forcing that runs after the code under test does not merely add a
+  constraint, it overwrites evidence.
+- **2026-08-18 — The scenario script is a Lua table inside the cart, and that is a hard
+  budget nobody had hit before.** `scenario_ufo_shot_down` was first written as
+  `[(1, FIRE), (1, IDLE)] * 4440` — one segment per frame, the shape every earlier scenario
+  uses — and `pack.py` refused it: 88,624 bytes against the 65,535-byte single-bank limit.
+  The fix is not compression but a coarser script: the bullet lives 59 frames and `fire()`
+  refuses while it is up, so one press every 60 frames produces exactly the same shots at a
+  thirtieth of the segments. Measured rather than reasoned — eight presses 60 frames apart
+  produced eight bullets, at frames 117, 177, 237 and so on. `SHOT_PERIOD` is now a named
+  constant. Any future scenario much past 3,000 frames of alternating masks will hit this.
+- **2026-08-18 — Two scenario assertions were written against the frame's own traced state
+  and had to be moved to its predecessor.** `scenario_ufo_crossings` first failed on "it
+  moves at one speed" (deltas -1, 0, 1) and "every crossing is 256 frames" (lengths 256 and
+  346) — both were the death-pause freeze working correctly, being read as a stall. The cart
+  changes state *after* it has drawn, so the last frame of a pause is already traced as
+  `PLAYING` though `state_player_dead()` ran it. Whether a frame moved anything is decided by
+  the state it *started* in, which is the previous frame's trace. `step_schedule()` had
+  documented exactly this since M3; it needed applying twice more.
+- **2026-08-18 — `tools/screendump.py` needs a life count as well as a gate.** `--ufo` waits
+  for the saucer to be wholly on screen, the same class of gate as `--state` and for the same
+  reason — the spawn frame is random, so no `--frames` value reaches it. But an idle ship
+  spends its three lives somewhere in the first few thousand frames, and `GAME_OVER` is a
+  state `update_ufo()` never runs in, so the gate would have waited past the end of the game.
+  `--lives` pins the count, borrowed from `tools/input-probe.lua`, which had needed it since
+  M3 for the same reason one level down.
+- **2026-08-18 — `--hold` cannot reach a worst case that arrives on a timer, which is a gap
+  in L052 rather than in this milestone.** The rule's premise is that a gamepad mask puts the
+  busiest frame on screen; that holds for a ship, a bullet and a fleet, and fails for a saucer
+  that comes 900 to 1,500 frames in and crosses in 256. `fpscheck.py`'s default 300/1200
+  samples can contain none of it, and the differential would then report a frame rate for a
+  screen the saucer was never on. `--samples` moves the window; the measurement was taken at
+  1,200..2,400 and, separately, three runs under the same held mask confirmed a full 256-frame
+  crossing falls inside it. The rule is amended to say so.
 
 - **2026-08-17 — Two M4 scenarios were flaky against the random stream and had been since
   M4; both windows lengthened.** Found by running the suite repeatedly during M5, not caused
@@ -501,6 +618,24 @@ recorded in `docs/tic80-api.md` **before its first use**.
   (L007); `MISSION.md` §3's ban on faking destruction with sprite swaps is therefore
   satisfied structurally rather than by discipline. `BUNKER_SHAPE` is read with the same
   `s:sub()` method form `blit_sprite_sheet()` already uses, which never reaches `_ENV`.
+- M6 added no TIC-80 call either, 2026-08-18, checked the same mechanical way and this time
+  against a prediction: `PROGRESS.md` had M6 down as the first milestone since M1 likely to
+  need one. It did not. The L011 `_ENV` list is unchanged for the fifth milestone running —
+  `BOOT`, `TIC`, `btn`, `btnp`, `cls`, `game`, `ipairs`, `math`, `poke4`, `rect`, `spr`. The
+  saucer is a `spr` and its bonus a `math.random`, both recorded. L011 was run *before* the
+  code was written rather than at the close, per M5's note, which is what makes this a
+  measurement rather than a claim.
+- Two facts were nevertheless new, and both were looked up before first use per §4.1. The
+  **tile sheet is 16 tiles to a row**, which `spr`'s `w`/`h` composite block is laid out
+  against — no page states it outright, so it was measured on the framebuffer and written
+  into `docs/tic80-ram.md`. And `math.random` has a **two-argument form**, `math.random(m, n)`
+  for an integer in `m..n`; `docs/lua-notes.md` had listed only the other two and its silence
+  read as an absence. Confirmed in-console (`math.random(900, 1500)` returned 1142 and 1087)
+  and recorded there.
+- `spr`'s composite path is exercised for the first time in M6, so its wiki entry is now
+  measured rather than only read: the "left-to-right from `id`" claim was confirmed on the
+  framebuffer, and the two tiles land horizontally adjacent with nothing bleeding into the
+  row below.
 - The `btnp` entry carries a `DISCREPANCY:` marker per `AGENTS.md` §4.3 — not between
   the docs and the console, but between the console and RAM: `btnp` ignores writes to
   the GAMEPADS region. It is the reason `tools/inputsim.py` supplies its own.
@@ -509,8 +644,9 @@ recorded in `docs/tic80-api.md` **before its first use**.
 
 ## 5. Known bugs
 
-None reproducible as of 2026-08-17. All twenty-two M1–M5 scenarios in `tools/inputsim.py`
-pass, and every framebuffer dump matches its milestone's acceptance criteria.
+None reproducible as of 2026-08-18. All twenty-eight M1–M6 scenarios in `tools/inputsim.py`
+pass — 148 assertions, six clean runs end to end — and every framebuffer dump matches its
+milestone's acceptance criteria.
 
 M3's note here — that the fleet could march off the bottom of the screen because nothing
 could end the game — is closed: the fleet reaching the player's row is now a game over.
@@ -527,14 +663,39 @@ Per `AGENTS.md` §4.5: state the question, implement around it under a clearly s
 assumption, and record the assumption here. Mark answered ones `RESOLVED:` with the
 answer and its source; do not delete them.
 
-- **OPEN: Do the bunkers actually reset at the start of each wave?** `MISSION.md` §3 says
-  they do, and M5 **cannot test it**: there is no wave transition until M7's `WAVE_CLEAR`,
-  and `reset_bunkers()` is a `local` that `tools/inputsim.py` cannot reach without putting a
-  hook in the cart, which `LINT-RULES.md` L053 forbids. Assumed correct on inspection — it
-  is the same loop that fills the grid at boot, and the boot fill *is* verified, all 296
-  cells against `BUNKER_SHAPE`. What is untested is only that something calls it at the
-  right moment, and in M5 nothing calls it at all beyond `BOOT()`. Closes with M7's wave
-  transition, which should assert the shields come back full after a wave that eroded them.
+- **OPEN: Do the bunkers and the saucer actually reset at the start of each wave?**
+  `MISSION.md` §3 says the shields reset per wave and that the saucer is never present during
+  a wave transition, and neither M5 nor M6 **can test it**: there is no wave transition until
+  M7's `WAVE_CLEAR`, and `reset_bunkers()` and `reset_ufo()` are `local`s that
+  `tools/inputsim.py` cannot reach without putting a hook in the cart, which
+  `LINT-RULES.md` L053 forbids. Both assumed correct on inspection, and both boot paths *are*
+  verified — all 296 cells against `BUNKER_SHAPE`, and the saucer's first interval rolled
+  in-band on frame 1. What is untested in each case is only that something calls it at the
+  right moment, and nothing does beyond `BOOT()`. Widened from the shields alone on
+  2026-08-18, when `reset_ufo()` joined them. Closes with M7's wave transition, which should
+  assert that the shields come back full after a wave that eroded them, and that no saucer is
+  up on the first frame of a new wave with a fresh interval rolled.
+- **OPEN: Is 1 px a frame the right saucer speed?** It is the ship's own speed, which means
+  catching the saucer requires leading it by the 51 frames a bullet takes to climb from the
+  muzzle to the lane — a skill shot rather than a gift. Measured, not felt: a parked ship
+  tapping as fast as the one-shot rule allows hit 7 of 32 crossings, about one in five, which
+  is a rate nobody has played. `UFO_SPEED` is a one-line change but an integer-only one in
+  both directions — 2 halves both the lead and the crossing, and anything below 1 needs a
+  fractional accumulator that nothing else in the file carries.
+- **OPEN: Is a flat one-in-four bonus the right feel?** `MISSION.md` §5 lists the four values
+  without a rule, so a uniform draw is the literal reading and is what is implemented. The
+  arcade's 300 was not random — it was earned on the 23rd shot and every 15th after, a hidden
+  rule most players never learned — so a uniform draw means a 300 can only ever be received,
+  never earned. Whether that reads as luck or as arbitrary is a question only playing settles.
+  `UFO_POINTS` is the tunable; a shot-count rule is the alternative, and it costs a lifetime
+  shot counter.
+- **OPEN: Is 15 to 25 seconds the right interval, given a wave lasts two to four minutes?**
+  It is `MISSION.md` §3's own figure and therefore the best available answer, but it works out
+  at five to eight saucers a wave with each crossing only 4.3 s long, so the saucer is in the
+  sky roughly a fifth of the time. Whether that is an event or wallpaper is a playing
+  question. `UFO_SPAWN_MIN` and `UFO_SPAWN_MAX`, one line each — but see the note above about
+  `UFO_FLEET_MIN`: the suppression threshold is the one saucer constant that is not a local
+  change.
 - **OPEN: Is a 74-cell shield that a parked ship drills through in four shots the right
   durability?** Measured rather than felt (§3). Four shots to open a channel is the arcade's
   own behaviour and is deliberate, but whether a shield that yields that fast still reads as

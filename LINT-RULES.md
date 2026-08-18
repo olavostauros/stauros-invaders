@@ -24,6 +24,7 @@ awk 'length > 100 {print FILENAME":"FNR": "length" chars"}' game.lua          # 
 grep -nP '\t| +$' game.lua                                                    # L021
 grep -nE '^\s*--.*(===|---|\*\*\*|###|___|[─│┌┐└┘█▀▄])' game.lua              # L030
 grep -nE 'spr\(' game.lua | grep -vE 'spr\([A-Z_]+[,)]'                       # L016
+grep -nE 'spr\(' game.lua | grep -vE ', 1, 1\)$'                              # L016 composite
 grep -nE -e '--.*\b(TODO|FIXME|XXX|HACK|NOTE)\b' game.lua                     # L031
 grep -nE '\b(require|dofile|loadfile|io\.|os\.|package\.|collectgarbage)' game.lua  # L002
 grep -nE 'while +true|repeat' game.lua                                        # L003
@@ -32,8 +33,9 @@ grep -n 'DEBUG *= *true' game.lua                                             # 
 [ game.tic -nt game.lua ] || echo "L050: game.tic is stale, run python3 pack.py"
 ```
 
-Each command should print nothing, except two that print lists to be read: the `_ENV`
-one, against L010's allowlist, and the `spr(` one, against L016's sprite sheet.
+Each command should print nothing, except three that print lists to be read: the `_ENV`
+one, against L010's allowlist, and the two `spr(` ones, against L016's sprite sheet — the
+second lists the composite calls, whose extra ids no grep can name for you.
 
 Closing a milestone additionally needs the two checks that require running the cart.
 They take seconds and half a minute respectively, so they are milestone-close rather
@@ -46,7 +48,10 @@ python3 tools/inputsim.py      # L054 - behavior under scripted input
 ```
 
 `screendump.py` and `fpscheck.py` both take `--hold <mask>` so the frame they measure is
-the milestone's worst case rather than an idle one (L052).
+the milestone's worst case rather than an idle one (L052). For anything that arrives on a
+timer rather than on a button, `screendump.py` needs a gate that waits for it (`--state`,
+`--ufo`, with `--lives` to stop the game ending first) and `fpscheck.py` needs `--samples`
+to put its window where the thing is.
 
 ---
 
@@ -188,6 +193,16 @@ grep -nE 'spr\(' game.lua | grep -vE 'spr\([A-Z_]+[,)]'   # ids the first grep c
 than in the cart is a consequence of the non-PRO packing workaround, and it is exactly
 the kind of thing a later agent would assume away.*
 
+*Amended 2026-08-18 during M6, with the first composite `spr()`. A `w` or `h` above 1 draws
+`w × h` consecutive ids starting at `id`, left-to-right then top-to-bottom, and **neither
+grep can see any of them but the first**. So for every `spr()` the first grep resolves,
+read its `w` and `h` arguments and check every id in the block, not only the one that is
+named. The saucer is `spr(SPR_UFO, ..., UFO_TILES, 1)`: id 10 is drawn on every frame it is
+on screen and appears nowhere in any `spr()` call, so the pass reports clean whether or not
+it was ever blitted. The block also must not straddle a sheet row — 16 tiles to a row
+(`docs/tic80-ram.md`), so an `id` with `id % 16 == 15` and `w = 2` reaches across into the
+next row.*
+
 *Amended 2026-08-17 during M2. The first grep only matches an id spelled as a bare
 constant, and `draw_fleet` passes `FLEET_ROW_SPRITE[row] + fleet.frame` — so the check
 reported clean while saying nothing about six of the cart's seven sprites. The second
@@ -288,6 +303,18 @@ on, and it would keep flattering right up until real frames started dropping.
 `AGENTS.md` §6 says *worst-case entity count*, so pass `--hold <mask>` to keep the
 milestone's busiest frame on screen while it measures. An idle cart is not the worst
 case and its frame rate is not the one the criterion asks about.
+
+*Amended 2026-08-18 during M6.* `--hold` only reaches a worst case built out of things a
+button controls. An entity that arrives on a **timer** can miss both samples entirely: the
+saucer comes 900 to 1500 frames in and crosses in 256, so the default 300/1200 window can
+contain none of it and the differential would report a frame rate for a screen the saucer
+was never on. Pass `--samples <short> <long>` to move the window to where the thing being
+measured actually is, and say in `PROGRESS.md` which window was measured and whether it was
+on screen for it — measured, not assumed.
+
+```bash
+python3 tools/fpscheck.py --hold 24 --samples 1200 2400
+```
 
 *Added 2026-08-16, when M0's 60 FPS criterion was first actually measured. The tool
 cross-checks the console's `time()` against the host wall clock, because `time()` alone
@@ -408,6 +435,14 @@ luck rather than a decision. `scenario_tap_while_in_flight` is the sharp case: s
 span exactly 60 frames against a 59-frame flight, so a shield that ate the bullet would
 free the slot early and let a later tap fire legitimately — reported as `6 bullet(s) from
 6 presses`, indistinguishable from M1's single-bullet rule breaking.*
+
+*Amended 2026-08-18 during M6. The geometry a scenario asserts is **all** of it, not only
+the obstacles that hold still. The shields never move, so a muzzle either clears them or
+does not; the fleet sweeps every column of the screen over a wave, so no aim at anything
+above it is permanently clear. A scenario shooting past the fleet therefore cannot assert
+that its column is open — it asserts that the column was open for most of the run, which is
+what makes a run that hit nothing evidence about the target rather than about the fleet.
+`fires_into_the_lane()` is that second line, and `scenario_ufo_shot_down` needs both.*
 
 ### L060 — a probe traces identity, not just quantity
 Where the game can destroy things one at a time, the probe reports *which* one, not how
