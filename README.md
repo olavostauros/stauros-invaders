@@ -158,6 +158,16 @@ ship dies on a different frame every run and the mystery ship arrives 15 to 25 s
 screen. Both usually want `--lives 3`, which pins the life count so the game does not end
 before the frame you are waiting for arrives.
 
+Two screens need more than waiting. `--clear <frame>` empties the fleet, which is the only
+way to reach the wave banner — killing 55 invaders by holding fire takes tens of thousands
+of frames and the ship is shot down first. And `--state GAME_OVER` wants the default
+`--hold 0`: fire leaves a game over on the frame after it arrives, so a dump holding the
+button waits for a screen it keeps walking out of.
+
+The probes press past the title screen on their own, on frames they do not count, so a
+frame number here still means a frame of play. `--state TITLE` is the exception — it dumps
+the title itself.
+
 ### Pressing buttons, without a keyboard
 
 Nothing here can press a key: WSLg takes input from the Windows side, and no injection

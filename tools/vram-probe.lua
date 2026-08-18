@@ -6,7 +6,12 @@ local PROBE_WARMUP = 2
 local PROBE_STATE = ""
 local PROBE_UFO = 0
 local PROBE_LIVES = 0
+local PROBE_CLEAR = 0
 local PROBE_GAMEPAD = 0x0FF80
+-- Button 4 as a gamepad mask. The console reads btnp against a snapshot of the real input
+-- device rather than against RAM, so a poked hold registers as a press every frame - which
+-- is useless for testing btnp and exactly what is wanted for walking past a title screen.
+local PROBE_FIRE_MASK = 16
 -- The saucer's own width and the screen's, repeated here because the cart's constants are
 -- locals this probe cannot see. Only used to hold the dump until it is wholly on screen.
 local PROBE_UFO_W = 16
@@ -14,9 +19,36 @@ local PROBE_SCREEN_W = 240
 
 local _TIC = TIC
 local probe_frames = 0
+local probe_started = false
+
+-- Killing 55 invaders by holding fire takes tens of thousands of frames and the ship is
+-- shot down long before, so the shot that ends a wave is forced (LINT-RULES.md L056). The
+-- wave banner is the one screen no frame count and no held button can reach.
+local function clear_fleet()
+  for row = 1, #game.fleet.alive do
+    local cells = game.fleet.alive[row]
+    for col = 1, #cells do
+      cells[col] = false
+    end
+  end
+  game.fleet.count = 0
+end
 
 function TIC()
+  -- The cart opens on a title screen. Unless that screen is what is being dumped, the
+  -- probe presses past it on frames it does not count: a frame number in this tool has
+  -- always meant a frame of play. Held fire also leaves a game over, so a dump of that
+  -- screen wants --hold 0.
+  if not probe_started then
+    if game.state == "TITLE" and PROBE_STATE ~= "TITLE" then
+      poke(PROBE_GAMEPAD, PROBE_FIRE_MASK)
+      _TIC()
+      return
+    end
+    probe_started = true
+  end
   poke(PROBE_GAMEPAD, PROBE_HOLD)
+  if probe_frames + 1 == PROBE_CLEAR then clear_fleet() end
   -- An idle ship spends its three lives somewhere in the first few thousand frames, and a
   -- game over is a state update_ufo() never runs in, so a dump waiting for the saucer would
   -- wait past the end of the game. Holding the life count keeps it running until one comes.

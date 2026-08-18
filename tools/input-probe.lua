@@ -7,7 +7,11 @@ local PROBE_FLEET = {}
 local PROBE_LIVES = 0
 local PROBE_KEEP = 0
 local PROBE_RUSH = 0
+local PROBE_ENDLESS = 0
+local PROBE_TITLE = 0
+local PROBE_HI = -1
 local PROBE_GAMEPAD = 0x0FF80
+local PROBE_HI_SLOT = 0
 local PROBE_FIRE = 4
 
 local _TIC = TIC
@@ -16,6 +20,13 @@ local frame = 0
 local mask = 0
 local prev_mask = 0
 local console_btnp = 0
+local started = false
+
+-- A saved high score is the one piece of state no script can reach: it is left behind by
+-- a game played before this console was launched. Written here rather than into game.hi
+-- because what is being tested is that the cart reads the slot, and this file runs before
+-- BOOT() does.
+if PROBE_HI >= 0 then pmem(PROBE_HI_SLOT, PROBE_HI) end
 
 -- The console's btnp compares the gamepad against a snapshot taken from the real input
 -- device, not from RAM, so a poked hold reads as a fresh press every frame. Edge-detect
@@ -102,6 +113,25 @@ local function mask_at(f)
 end
 
 function TIC()
+  -- The game opens on a title screen now, and a script cannot spend a frame on the press
+  -- that leaves it without shifting every frame number in every scenario written before
+  -- M7. The probe presses A itself, through its own btnp, on frames it does not count:
+  -- frame 1 of a script is still the first frame of a game. The mask is dropped again
+  -- afterwards, so a script that fires on frame 1 still gets a fresh press.
+  if not started then
+    -- A scenario about the title screen has to be traced on it, so the press is left to
+    -- the script and frame 1 is the first frame of the title rather than of play.
+    if PROBE_TITLE == 1 then
+      started = true
+    elseif game.state == "TITLE" then
+      prev_mask, mask = 0, 1 << PROBE_FIRE
+      poke(PROBE_GAMEPAD, mask)
+      _TIC()
+      mask, prev_mask = 0, 0
+      return
+    end
+    started = true
+  end
   frame = frame + 1
   local next_mask = mask_at(frame)
   if next_mask == nil then
@@ -120,7 +150,11 @@ function TIC()
   -- A fixed script cannot dodge a shell aimed at a column it did not know would fire, so a
   -- scenario that has to outlive the fleet rather than the threat keeps its lives topped up.
   -- Death, the explosion and the respawn all still run; only the game over never arrives.
-  if PROBE_LIVES > 0 then game.lives = PROBE_LIVES end
+  --
+  -- A top-up rather than an assignment: the extra life is a life the game gives, and one
+  -- set every frame would take it straight back. Nothing could add a life before M7, so
+  -- this is the same forcing every earlier scenario ran under.
+  if PROBE_LIVES > 0 and game.lives < PROBE_LIVES then game.lives = PROBE_LIVES end
   -- Watching eight saucers cross at the real interval is four minutes of play. The wait
   -- between them is compressed here and nothing else is: the crossing, the side, the bonus
   -- and the collision all stay the game's own. Stands in for the minutes a player spends
@@ -133,6 +167,15 @@ function TIC()
     game.ufo.timer = PROBE_RUSH
   end
   _TIC()
+  -- An empty sky is no longer a state the game can be left in: the wave ends and the next
+  -- one arrives. The scenarios whose subject predates waves - movement, the single bullet,
+  -- the empty-fleet guard - clear the fleet only to get it out of the way, and they hold
+  -- the transition off to keep it out. This stands in for no player action at all, so it
+  -- is never used by a scenario about waves. Entering WAVE_CLEAR sets the state and the
+  -- timer and nothing else, which is why putting the state back is the whole of it.
+  if PROBE_ENDLESS == 1 and game.state == "WAVE_CLEAR" then
+    game.state = "PLAYING"
+  end
   -- the bullet's y goes negative before it despawns, so liveness is its own field
   -- rather than a sentinel coordinate. The saucer's x is off screen at both ends of every
   -- crossing for the same reason. Its bonus is traced rather than only the score: a saucer
@@ -146,5 +189,7 @@ function TIC()
         game.state .. " " .. game.lives .. " " .. game.death_timer ..
         enemy_bullets() .. bunker_masks() .. " " ..
         (game.ufo.active and 1 or 0) .. " " .. game.ufo.x .. " " .. game.ufo.dir ..
-        " " .. game.ufo.bonus .. " " .. game.ufo.timer .. "]", 12)
+        " " .. game.ufo.bonus .. " " .. game.ufo.timer .. " " ..
+        game.wave .. " " .. game.hi .. " " .. game.wave_timer .. " " ..
+        (game.extra_life and 1 or 0) .. "]", 12)
 end

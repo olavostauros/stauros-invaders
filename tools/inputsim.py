@@ -67,6 +67,15 @@ UFO_SPEED = 1
 UFO_SPAWN_MIN, UFO_SPAWN_MAX = 900, 1500
 UFO_FLEET_MIN = 8
 UFO_POINTS = (50, 100, 150, 300)
+WAVE_CLEAR_FRAMES = 120
+WAVE_DROP_Y = FLEET_DROP_Y
+FLEET_START_Y_MAX = BUNKER_Y - SPRITE_H - (FLEET_ROWS - 1) * FLEET_ROW_SPACING
+WAVE_FIRE_STEP, ENEMY_FIRE_FRAMES_MIN = 2, 15
+WAVE_STEP_TIGHTEN, FLEET_STEP_FRAMES_FLOOR = 5, 30
+EXTRA_LIFE_SCORE = 1500
+HUD_LIVES_MAX = 5
+HI_SCORE_SLOT = 0
+
 # A crossing enters and leaves a full sprite width off screen, so it is the same length
 # from either side: SCREEN_W + UFO_W frames at UFO_SPEED px each.
 UFO_LIFE = (SCREEN_W + UFO_W) // UFO_SPEED
@@ -94,7 +103,8 @@ TRACE = (
             for field in ((f"e{slot}", FLAG), (f"e{slot}x", NUM), (f"e{slot}y", NUM)))
     + tuple((f"b{b}r{row}", NUM) for b in range(1, BUNKER_COUNT + 1)
             for row in range(1, BUNKER_ROWS + 1))
-    + (("ufo", FLAG), ("ufox", NUM), ("ufod", NUM), ("ufob", NUM), ("ufot", NUM)))
+    + (("ufo", FLAG), ("ufox", NUM), ("ufod", NUM), ("ufob", NUM), ("ufot", NUM))
+    + (("wave", NUM), ("hi", NUM), ("wtimer", NUM), ("extra", FLAG)))
 
 FIELDS = tuple(name for name, _ in TRACE)
 FRAME_RE = re.compile(r"\[" + " ".join(f"({pat})" for _, pat in TRACE) + r"\]")
@@ -124,9 +134,27 @@ def row_count(frame, row):
     return popcount(frame[ROWS[row - 1]])
 
 
-def step_frames(alive):
-    """game.lua's fleet_step_frames(), mirrored."""
-    span = FLEET_STEP_FRAMES_MAX - FLEET_STEP_FRAMES_MIN
+def wave_fleet_y(wave):
+    """game.lua's wave_fleet_y(), mirrored."""
+    return min(FLEET_START_Y + (wave - 1) * WAVE_DROP_Y, FLEET_START_Y_MAX)
+
+
+def wave_fire_frames(wave):
+    """game.lua's wave_fire_frames(), mirrored."""
+    return max(ENEMY_FIRE_FRAMES - (wave - 1) * WAVE_FIRE_STEP, ENEMY_FIRE_FRAMES_MIN)
+
+
+def wave_step_frames_max(wave):
+    """game.lua's wave_step_frames_max(), mirrored."""
+    return max(FLEET_STEP_FRAMES_MAX - (wave - 1) * WAVE_STEP_TIGHTEN,
+               FLEET_STEP_FRAMES_FLOOR)
+
+
+def step_frames(alive, wave=1):
+    """game.lua's fleet_step_frames(), mirrored. The wave lowers the top of the line and
+    leaves its bottom where it is, so a full fleet steps sooner and the last invader does
+    not."""
+    span = wave_step_frames_max(wave) - FLEET_STEP_FRAMES_MIN
     return FLEET_STEP_FRAMES_MIN + (alive - 1) * span // (FLEET_COUNT - 1)
 
 
@@ -325,9 +353,10 @@ def step_schedule(frames):
     for i, fr in enumerate(frames):
         alive = FLEET_COUNT if i == 0 else living(frames[i - 1])
         state = "PLAYING" if i == 0 else frames[i - 1]["state"]
+        wave = 1 if i == 0 else frames[i - 1]["wave"]
         if state == "PLAYING" and alive:
             timer += 1
-            if timer >= step_frames(alive):
+            if timer >= step_frames(alive, wave):
                 timer = 0
                 due.add(fr["f"])
     return due
@@ -371,7 +400,8 @@ def first_overlap_frame(row):
     raise AssertionError(f"a bullet never reaches row {row}")
 
 
-def run(script, clear_at=0, fleet_at=None, lives=0, keep=0, rush=0):
+def run(script, clear_at=0, fleet_at=None, lives=0, keep=0, rush=0, endless=False,
+        title=False, hi=None):
     """Run game.lua under the probe with `script` as [(frames, mask), ...] and return
     a list of per-frame dicts.
 
@@ -382,6 +412,22 @@ def run(script, clear_at=0, fleet_at=None, lives=0, keep=0, rush=0):
     of marching), lives holds the life count every frame so a long run outlives the threat
     rather than the fleet (a player who never gets hit), and rush caps the saucer's wait
     (the minutes a player spends between saucers).
+
+    title leaves the press that starts a game to the script, so frame 1 is the first frame
+    of the title screen rather than of play; without it the probe presses past the title on
+    frames it does not trace, which is what keeps every pre-M7 scenario's frame numbers
+    where they were.
+
+    hi writes the saved high-score slot before the cart boots. It stands in for the one
+    piece of state no script can reach at all - a game played before this console was
+    launched - and it is what makes a pmem round trip assertable rather than relative to
+    whatever the suite happened to leave in the slot.
+
+    endless is the one forcing that stands in for no player action at all: since M7 an
+    emptied fleet ends the wave and the next one arrives, so a scenario that clears the
+    fleet merely to get it out of the way holds the transition off to keep it out. It
+    belongs only to scenarios whose subject predates waves; the transition itself is
+    measured without it.
 
     There is deliberately no forcing that spawns a saucer. Waiting for one is 25 seconds of
     play at worst, which L056 calls reachable, and MISSION.md's acceptance criterion is
@@ -395,6 +441,12 @@ def run(script, clear_at=0, fleet_at=None, lives=0, keep=0, rush=0):
     probe = re.sub(r"local PROBE_LIVES = 0", f"local PROBE_LIVES = {lives}", probe)
     probe = re.sub(r"local PROBE_KEEP = 0", f"local PROBE_KEEP = {keep}", probe)
     probe = re.sub(r"local PROBE_RUSH = 0", f"local PROBE_RUSH = {rush}", probe)
+    probe = re.sub(r"local PROBE_ENDLESS = 0",
+                   f"local PROBE_ENDLESS = {1 if endless else 0}", probe)
+    probe = re.sub(r"local PROBE_TITLE = 0",
+                   f"local PROBE_TITLE = {1 if title else 0}", probe)
+    if hi is not None:
+        probe = re.sub(r"local PROBE_HI = -1", f"local PROBE_HI = {hi}", probe)
     if fleet_at:
         probe = re.sub(r"local PROBE_FLEET = \{\}",
                        "local PROBE_FLEET = {%d,%d,%d}" % fleet_at, probe)
@@ -497,6 +549,33 @@ def cleared_the_wave(frames):
                  f"the fleet at y {first['fy']}, which is no landing")
 
 
+def games(frames):
+    """The run split into the games it played, title frames dropped.
+
+    Since M7 a game over is not the end of a run: fire takes it back to the title and the
+    next press starts another game, which a script that taps fire supplies within a few
+    frames. Everything past that point belongs to a different fleet at a different wave
+    with a different score, and reading it as a continuation of the first is how a step
+    schedule acquires an unscheduled step 4,000 frames after the last real one."""
+    out, current = [], []
+    for fr in frames:
+        if fr["state"] == "TITLE":
+            if current:
+                out.append(current)
+                current = []
+            continue
+        current.append(fr)
+    if current:
+        out.append(current)
+    return out
+
+
+def first_game(frames):
+    """The frames of the first game the run played."""
+    played = games(frames)
+    return played[0] if played else frames
+
+
 def outlived_the_threat(frames):
     """The weaker companion to stayed_playing(), for the long runs that keep their lives
     topped up: dying is expected and simulated through, reaching a game over is not - past
@@ -512,7 +591,7 @@ def outlived_the_threat(frames):
 
 def scenario_move(mask, label, expect):
     """Emptied fleet, like every M1 scenario here: see scenario_hold_fire."""
-    frames = run([(300, mask)], clear_at=1)
+    frames = run([(300, mask)], clear_at=1, endless=True)
     xs = [fr["x"] for fr in frames]
     wrong = [(fr["f"], fr["x"], expect(fr["f"])) for fr in frames
              if fr["x"] != expect(fr["f"])]
@@ -537,7 +616,7 @@ def scenario_hold_fire():
     so 300 frames of held fire produced no bullet at all. A fleet with nothing alive cannot
     shoot, which is the condition M1 was verified under before the fleet existed.
     """
-    frames = run([(120, LEFT), (300, LEFT | FIRE)], clear_at=1)
+    frames = run([(120, LEFT), (300, LEFT | FIRE)], clear_at=1, endless=True)
     fired = shots(frames)
     print("\npark at the left edge, then hold fire for 300 frames")
     ok = check("one bullet, not a stream", len(fired) == 1,
@@ -565,7 +644,7 @@ def scenario_tap_fire():
     A fleet with nothing alive cannot fire, which is exactly the condition M1 verified this
     under."""
     taps = 4
-    frames = run([(1, FIRE), (79, IDLE)] * taps, clear_at=1)
+    frames = run([(1, FIRE), (79, IDLE)] * taps, clear_at=1, endless=True)
     fired = shots(frames)
     print(f"\ntap fire {taps} times, spaced 80 frames apart, fleet cleared")
     ok = check("one bullet per press", len(fired) == taps,
@@ -580,7 +659,8 @@ def scenario_tap_while_in_flight():
     scenario_hold_fire: a bullet that hits an invader frees its slot early, and then a
     later tap fires a second bullet legitimately - which would fail this check for a
     reason it is not testing."""
-    frames = run([(120, LEFT)] + [(1, LEFT | FIRE), (9, LEFT)] * 6, clear_at=1)
+    frames = run([(120, LEFT)] + [(1, LEFT | FIRE), (9, LEFT)] * 6, clear_at=1,
+                 endless=True)
     fired = shots(frames)
     print("\ntap fire 6 times, 10 frames apart, while a bullet is still in flight")
     ok = check("presses during flight are ignored", len(fired) == 1,
@@ -613,7 +693,7 @@ def scenario_console_btnp():
 def scenario_both_directions():
     """Emptied fleet, for the reason scenario_tap_fire gives: the check is that the ship
     does not move, so it cannot be parked away from the fleet's guns."""
-    frames = run([(60, LEFT | RIGHT)], clear_at=1)
+    frames = run([(60, LEFT | RIGHT)], clear_at=1, endless=True)
     xs = {fr["x"] for fr in frames}
     print("\nhold left and right together for 60 frames, fleet cleared")
     ok = check("opposed input cancels", xs == {START_X}, f"x stayed at {sorted(xs)}")
@@ -772,8 +852,11 @@ def scenario_speed_up():
     for i in range(34):
         mask = RIGHT if i % 2 == 0 else LEFT
         script += [(1, mask | FIRE), (9, mask)] * 24
-    frames = run(script, lives=PLAYER_LIVES)
-    print(f"\nsweep and fire for {len(frames)} frames, watching the step interval")
+    whole = run(script, lives=PLAYER_LIVES)
+    # The curve belongs to one wave of one game. A run that finishes the wave restarts a
+    # few frames later, and the second game's fleet is not this one's.
+    frames = first_game(whole)
+    print(f"\nsweep and fire for {len(whole)} frames, watching the step interval")
 
     start = (FLEET_START_X, FLEET_START_Y, 1, 0)
     steps = [(fr["f"], FLEET_COUNT if i == 0 else living(frames[i - 1]))
@@ -811,7 +894,7 @@ def scenario_empty_fleet():
     # fleet emptied early leaves the whole window quiet, and the scenario is about the
     # guard in update_fleet(), not about dodging.
     cleared, total = 20, 400
-    frames = run([(total, IDLE)], clear_at=cleared)
+    frames = run([(total, IDLE)], clear_at=cleared, endless=True)
     after = frames[cleared - 1:]
     print(f"\nempty the fleet on frame {cleared}, then run {total - cleared} more frames")
 
@@ -1186,7 +1269,7 @@ def bullet_impacts(frames):
 def scenario_bunkers_intact():
     """The shields exist, all four of them, before anything has touched one. Emptied fleet
     so the run is quiet and nothing can erode a bunker while it is being counted."""
-    frames = run([(60, IDLE)], clear_at=1)
+    frames = run([(60, IDLE)], clear_at=1, endless=True)
     print("\ncount the shields over 60 quiet frames")
     full = {(col, row)
             for row in range(1, BUNKER_ROWS + 1)
@@ -1210,7 +1293,7 @@ def scenario_bunker_blocks_bullet():
     in. Emptied fleet, so the only thing the bullet can meet is the shield and the only
     thing that can erode one is the ship."""
     walk = START_X - NOTCH_X
-    frames = run([(walk, LEFT), (1, FIRE), (90, IDLE)], clear_at=1)
+    frames = run([(walk, LEFT), (1, FIRE), (90, IDLE)], clear_at=1, endless=True)
     print(f"\npark the muzzle at x {NOTCH_X + MUZZLE_X} under bunker 2, then fire once")
 
     ok = check("the ship is standing under a shield",
@@ -1257,7 +1340,8 @@ def scenario_bunker_erodes_progressively():
     walk = START_X - NOTCH_X
     # 69 idle frames a shot: once the channel is open a bullet needs ~60 frames to leave
     # the screen, and fire() refuses while one is still in flight.
-    frames = run([(walk, LEFT)] + [(1, FIRE), (69, IDLE)] * 10, clear_at=1)
+    frames = run([(walk, LEFT)] + [(1, FIRE), (69, IDLE)] * 10, clear_at=1,
+                 endless=True)
     print(f"\ndrill ten shots into bunker 2 at x {NOTCH_X + MUZZLE_X}")
 
     impacts = bullet_impacts(frames)
@@ -1744,6 +1828,439 @@ def scenario_ufo_freezes_on_death():
     return ok
 
 
+def frozen_fields(frames):
+    """What a state that draws without updating must hold still, as one tuple per frame.
+
+    The saucer is in here for the reason scenario_out_of_lives gives: a state that grew an
+    update_ufo() call would move it and nothing else in the suite would notice."""
+    return {(fleet_of(fr), fr["score"], fr["lives"], fr["ufo"], fr["ufox"], fr["ufot"],
+             tuple(fr[slot] for slot in SLOTS)) for fr in frames}
+
+
+def scenario_title_screen():
+    """MISSION.md's TITLE: the cart boots on it, nothing plays behind it, and A starts a
+    game.
+
+    title=True hands the press back to the script, so frame 1 is the first frame of the
+    title rather than of play. Every other scenario is traced the other way round."""
+    # Long enough after the press that the fleet takes a step even if the ship is shot on
+    # the way: an idle ship's first shell lands about 51 frames into a game and takes the
+    # march with it for the 90 frames of the pause, which is more than the 55 a full fleet
+    # steps on.
+    wait, after = 90, 300
+    frames = run([(wait, IDLE), (1, FIRE), (after, IDLE)], title=True)
+    print(f"\nboot and leave the title alone for {wait} frames, then press A")
+
+    titled = frames[:wait]
+    ok = check("the cart boots on the title screen",
+               all(fr["state"] == "TITLE" for fr in titled),
+               f"TITLE for all {len(titled)} frames before the press")
+
+    # A playing fleet of 55 steps every 55 frames, so a window this long could not have
+    # missed one. Nothing on the title screen is updated, and this is what says so.
+    held = frozen_fields(titled)
+    ok &= check("nothing plays behind the title", len(held) == 1,
+                f"fleet, score, lives, saucer and sky all held for {len(titled)} frames, "
+                f"through {wait // step_frames(FLEET_COUNT)} step(s) a playing fleet would "
+                f"have taken" if len(held) == 1 else f"{len(held)} distinct states seen")
+    ok &= check("no shot can be fired at a title screen",
+                not any(fr["live"] for fr in titled),
+                f"no player bullet in {len(titled)} frames of held input")
+    # The wait is counted down inside state_playing and nowhere else, so a title screen
+    # left up for a minute must not hand the first wave a saucer that is already due.
+    ok &= check("the saucer's wait does not run down on the title screen",
+                len({fr["ufot"] for fr in titled}) == 1 and not titled[0]["ufo"],
+                f"the timer held {titled[0]['ufot']} for all {len(titled)} frames")
+
+    started = frames[wait]
+    ok &= check("A starts a game on the frame it is pressed",
+                started["state"] == "PLAYING",
+                f"state {started['state']} on frame {started['f']}, the frame of the press")
+    ok &= check("the game it starts is a new one",
+                (living(started), started["score"], started["lives"], started["wave"],
+                 started["fy"], started["x"])
+                == (FLEET_COUNT, 0, PLAYER_LIVES, 1, FLEET_START_Y, START_X)
+                and bunker_live(started) == BUNKER_FULL * BUNKER_COUNT,
+                f"{living(started)} invaders at y {started['fy']}, score "
+                f"{started['score']}, {started['lives']} lives, wave {started['wave']}, "
+                f"{bunker_live(started)} bunker cells, ship at x {started['x']}")
+
+    playing = frames[wait:]
+    marching = [fr for fr in playing if fr["state"] == "PLAYING"]
+    ok &= check("the run gave the fleet frames to march in",
+                len(marching) > step_frames(FLEET_COUNT),
+                f"{len(marching)} playing frames of the {len(playing)} after the press, "
+                f"against the {step_frames(FLEET_COUNT)} a full fleet steps on")
+    ok &= check("and it plays: the fleet marches once the game is running",
+                len({fleet_of(fr) for fr in playing}) > 1,
+                f"the fleet took {len({fleet_of(fr) for fr in playing}) - 1} step(s) in "
+                f"the {len(playing)} frames after the press")
+    return ok
+
+
+def scenario_full_loop():
+    """MISSION.md's M7 acceptance criterion itself: title -> play -> game over -> title,
+    with no reload anywhere in it.
+
+    The landing is forced (LINT-RULES.md L056) for the reason scenario_fleet_landing gives:
+    marching there takes two minutes and three lives. Everything else here is button
+    presses, because every one of these transitions is a button press."""
+    # The landing is forced early on purpose. The fleet's first shell leaves the muzzle 25
+    # frames into a game and falls for another 26, so nothing can reach the ship before
+    # frame 81 - and a landing read while the ship is part way through a death pause would
+    # arrive whenever the pause ended rather than on the frame it was placed.
+    start, shoot, land = 30, 32, 70
+    over_for, back, replay = 60, 40, 60
+    # The frames the three presses land on, so the script is built from what is being
+    # asserted rather than the assertions counted back out of the script.
+    over_press = land + over_for
+    retry = over_press + back + 1
+    script = [(start - 1, IDLE), (1, FIRE), (1, IDLE), (1, FIRE),
+              (over_press - shoot - 1, IDLE), (1, FIRE), (back, IDLE), (1, FIRE),
+              (replay, IDLE)]
+    landing_y = FLEET_LANDING_Y - (FLEET_ROWS - 1) * FLEET_ROW_SPACING
+    frames = run(script, title=True, fleet_at=(land, FLEET_X_MAX, landing_y))
+    print(f"\ntitle to play to game over to title to play again, over {len(frames)} frames")
+
+    def first_at(state, start_at):
+        for fr in frames:
+            if fr["f"] >= start_at and fr["state"] == state:
+                return fr
+        return None
+
+    played = first_at("PLAYING", 1)
+    over = first_at("GAME_OVER", 1)
+    ok = check("the first press starts the game", played is not None
+               and played["f"] == start,
+               f"PLAYING from frame {played['f']}, pressed on {start}" if played
+               else "the game never started")
+    dying = [fr for fr in frames if fr["f"] < land and fr["state"] != "PLAYING"
+             and fr["f"] >= start]
+    ok &= check("the ship was still flying when the fleet came down", not dying,
+                f"PLAYING for all {land - start} frames between the press and the landing"
+                if not dying else
+                f"state {dying[0]['state']} on frame {dying[0]['f']}, before the landing")
+    ok &= check("the fleet landing ends it", over is not None and over["f"] == land,
+                f"GAME_OVER on frame {over['f']}, the frame the fleet was placed on the "
+                f"player's row" if over and over["f"] == land else
+                f"GAME_OVER on frame {over['f']}, not the frame {land} it was placed on"
+                if over else "the game never ended")
+    if not played or not over:
+        return False
+
+    scored = frames[land - 2]["score"]
+    ok &= check("the game that ended had been played", scored > 0,
+                f"{scored} points on the board when the fleet landed")
+
+    titled = first_at("TITLE", over["f"])
+    ok &= check("A leaves the game over for the title",
+                titled is not None and titled["f"] == over_press,
+                f"TITLE on frame {titled['f']}, {titled['f'] - over['f']} frames after "
+                f"the game ended" if titled else "the game over had no way out")
+    if not titled:
+        return False
+
+    stuck = [fr for fr in frames if over["f"] <= fr["f"] < titled["f"]]
+    ok &= check("and nothing moves until it is pressed",
+                all(fr["state"] == "GAME_OVER" for fr in stuck)
+                and len(frozen_fields(stuck)) == 1,
+                f"GAME_OVER held with the score at {stuck[-1]['score']} for "
+                f"{len(stuck)} frames")
+
+    again = first_at("PLAYING", titled["f"])
+    ok &= check("A starts a second game from the title",
+                again is not None and again["f"] == retry,
+                f"PLAYING again on frame {again['f']}" if again
+                else "the title had no way back into a game")
+    if not again:
+        return False
+
+    ok &= check("the second game is a game, not the first one resumed",
+                (again["score"], again["lives"], again["wave"], living(again),
+                 again["fy"], again["x"]) == (0, PLAYER_LIVES, 1, FLEET_COUNT,
+                                              FLEET_START_Y, START_X)
+                and bunker_live(again) == BUNKER_FULL * BUNKER_COUNT
+                and not again["ufo"],
+                f"score {again['score']} (was {scored}), {again['lives']} lives, wave "
+                f"{again['wave']}, {living(again)} invaders back at y {again['fy']}, "
+                f"{bunker_live(again)} bunker cells, no saucer")
+    ok &= check("the high score survives the game that set it",
+                again["hi"] >= scored,
+                f"HI {again['hi']} against the {scored} the last game scored")
+    return ok
+
+
+def scenario_wave_transition():
+    """MISSION.md's WAVE_CLEAR, and the two resets M5 and M6 built and left undriven.
+
+    The fleet is emptied by the probe (L056) for the reason scenario_empty_fleet gives -
+    and deliberately without endless, because the transition is what this measures. A
+    shield is chewed open first, so 'bunkers reset to full at the start of each wave' has
+    something to come back from."""
+    walk = START_X - NOTCH_X
+    fire_for, settle, cleared, watch = 4, 80, 200, 260
+    script = ([(walk, LEFT)] + [(1, FIRE), (69, IDLE)] * fire_for
+              + [(settle, IDLE), (watch, IDLE)])
+    total = walk + fire_for * 70 + settle + watch
+    frames = run(script, clear_at=cleared)
+    print(f"\nchew a shield open, empty the fleet on frame {cleared}, watch the wave turn")
+
+    before = frames[cleared - 2]
+    eroded = bunker_live(before)
+    ok = check("a shield was eroded before the wave ended",
+               eroded < BUNKER_FULL * BUNKER_COUNT,
+               f"{eroded} of {BUNKER_FULL * BUNKER_COUNT} cells left standing")
+
+    pause = [fr for fr in frames if fr["state"] == "WAVE_CLEAR"]
+    ok &= check(f"the wave ends in a {WAVE_CLEAR_FRAMES} frame pause",
+                len(pause) == WAVE_CLEAR_FRAMES
+                and [fr["wtimer"] for fr in pause]
+                == list(range(WAVE_CLEAR_FRAMES, 0, -1))
+                and pause[0]["f"] == cleared,
+                f"{len(pause)} frames of WAVE_CLEAR from frame {pause[0]['f']}, timer "
+                f"{pause[0]['wtimer']} down to {pause[-1]['wtimer']}"
+                if pause else "the wave never ended")
+    if len(pause) != WAVE_CLEAR_FRAMES:
+        return False
+
+    ok &= check("nothing moves through the pause", len(frozen_fields(pause)) == 1,
+                f"fleet, score, lives, saucer and sky all held for {len(pause)} frames")
+    ok &= check("the field is the one the wave was won on",
+                all(bunker_live(fr) == eroded for fr in pause)
+                and {fr["wave"] for fr in pause} == {1},
+                f"still wave 1 with the same {eroded} cells standing")
+
+    fresh = frames[pause[-1]["f"]]
+    ok &= check("the next wave arrives whole, on one frame",
+                fresh["state"] == "PLAYING" and fresh["wave"] == 2
+                and living(fresh) == FLEET_COUNT
+                and (fresh["fx"], fresh["fy"], fresh["fdir"], fresh["fframe"])
+                == (FLEET_START_X, wave_fleet_y(2), 1, 0),
+                f"wave {fresh['wave']} on frame {fresh['f']}: {living(fresh)} invaders at "
+                f"({fresh['fx']}, {fresh['fy']}), heading {fresh['fdir']}")
+    ok &= check("the shields come back to full",
+                bunker_live(fresh) == BUNKER_FULL * BUNKER_COUNT,
+                f"{bunker_live(fresh)} cells, from {eroded} at the end of wave 1")
+    ok &= check("no saucer is present, and its wait is rolled afresh",
+                not fresh["ufo"] and UFO_SPAWN_MIN <= fresh["ufot"] <= UFO_SPAWN_MAX,
+                f"no saucer up, wait rolled at {fresh['ufot']} in "
+                f"{UFO_SPAWN_MIN}..{UFO_SPAWN_MAX}")
+    ok &= check("the sky is cleared and the ship recentred",
+                not fresh["live"] and not enemy_flying(fresh)
+                and fresh["x"] == START_X,
+                f"no bullet, no shell, ship back at x {fresh['x']}")
+    ok &= check("the score and the lives are the player's, not the wave's",
+                (fresh["score"], fresh["lives"])
+                == (before["score"], before["lives"]),
+                f"score {fresh['score']} and {fresh['lives']} lives carried across")
+    ok &= check("the trace ran past the transition", len(frames) == total,
+                f"{len(frames)} frames, {len(frames) - fresh['f']} of them in wave 2")
+    return ok
+
+
+def scenario_wave_difficulty():
+    """MISSION.md's wave progression: a lower start, a tighter march and a faster gun,
+    each measured against its own curve rather than against 'faster'.
+
+    Idle throughout, so the fleet stays at 55 in both waves and the two step intervals are
+    comparable. Lives topped up (L056): the ramp is what is being measured, not survival.
+    """
+    cleared, watch = 400, 700
+    frames = run([(cleared + watch, IDLE)], clear_at=cleared, lives=PLAYER_LIVES)
+    print(f"\nmeasure wave 1, end it on frame {cleared}, measure wave 2")
+
+    # Both timers advance inside state_playing and nowhere else, so an interval is a count
+    # of playing frames rather than of frames. Which frames those are is read off the
+    # *previous* frame's state, for the reason step_schedule() gives: the update runs inside
+    # TIC() before the trace is written, so the frame a death begins on has already marched.
+    advancing = {fr["f"] for i, fr in enumerate(frames)
+                 if i == 0 or frames[i - 1]["state"] == "PLAYING"}
+    stopped = {fr["f"] for fr in frames if fr["state"] != "PLAYING"}
+
+    def gaps(picked, across_a_pause=True):
+        """Playing frames between consecutive events. A death pause lengthens the wall gap
+        without lengthening the interval, and a 400-frame window holds only seven steps -
+        dropping every gap a pause touched is how this measured an empty list of them.
+
+        Shell gaps are the exception and drop those gaps anyway: kill_player() resets the
+        fire timer, so a gap spanning a death measures neither interval."""
+        out = []
+        for a, b in zip(picked, picked[1:]):
+            if not across_a_pause and stopped & set(range(a, b)):
+                continue
+            out.append(sum(1 for f in range(a + 1, b + 1) if f in advancing))
+        return out
+
+    def steps_in(wave):
+        return [fr["f"] for prev, fr in zip(frames, frames[1:])
+                if fr["wave"] == wave and fleet_of(fr) != fleet_of(prev)]
+
+    def shells_in(wave):
+        return [fr["f"] for fr, _ in enemy_shots(frames) if fr["wave"] == wave]
+
+    first = frames[0]
+    fresh = next(fr for fr in frames if fr["wave"] == 2)
+    ok = check("each wave starts a drop lower than the last",
+               (first["fy"], fresh["fy"]) == (wave_fleet_y(1), wave_fleet_y(2)),
+               f"wave 1 at y {first['fy']}, wave 2 at y {fresh['fy']}, a drop of "
+               f"{fresh['fy'] - first['fy']} px")
+    ok &= check("and the drop is capped clear of the shields",
+                wave_fleet_y(99) + (FLEET_ROWS - 1) * FLEET_ROW_SPACING + SPRITE_H
+                <= BUNKER_Y,
+                f"the deepest start is y {wave_fleet_y(99)}, putting the bottom row at "
+                f"y {wave_fleet_y(99) + (FLEET_ROWS - 1) * FLEET_ROW_SPACING}, above the "
+                f"band at y {BUNKER_Y}")
+
+    marches = [gaps(steps_in(wave)) for wave in (1, 2)]
+    want = [step_frames(FLEET_COUNT, wave) for wave in (1, 2)]
+    ok &= check("a full fleet marches faster in the second wave",
+                all(marches[i] and set(marches[i]) == {want[i]} for i in (0, 1)),
+                f"wave 1 stepped every {sorted(set(marches[0]))} frames, wave 2 every "
+                f"{sorted(set(marches[1]))}, against {want} from the curve")
+
+    fire = [gaps(shells_in(wave), across_a_pause=False) for wave in (1, 2)]
+    wanted = [wave_fire_frames(wave) for wave in (1, 2)]
+    ok &= check("and it shoots faster",
+                all(fire[i] and set(fire[i]) == {wanted[i]} for i in (0, 1)),
+                f"wave 1 fired every {sorted(set(fire[0]))} frames, wave 2 every "
+                f"{sorted(set(fire[1]))}, against {wanted} from the curve")
+    ok &= check("neither curve falls through its floor",
+                (wave_step_frames_max(99), wave_fire_frames(99))
+                == (FLEET_STEP_FRAMES_FLOOR, ENEMY_FIRE_FRAMES_MIN),
+                f"however many waves in, the march bottoms out at "
+                f"{wave_step_frames_max(99)} frames a step and the gun at "
+                f"{wave_fire_frames(99)}")
+    return ok
+
+
+def scenario_extra_life():
+    """MISSION.md section 5: an extra life at 1500 points, once per game.
+
+    1500 is more than the 990 points one wave of invaders holds, so a run has to get into a
+    second wave to reach it - and a sweeping ship does not quite clear the first before the
+    fleet lands on it at about ten thousand frames. Measured over six games without help:
+    1210, 1420, 1360, 1330, 1470 and 30, every one of them short. So the last few invaders
+    of wave 1 are killed by the probe on frame 8000 (LINT-RULES.md L056), standing in for
+    the shots that finish a wave the ship had nearly cleared, and the game plays on into
+    wave 2 where the threshold is comfortably crossed. The second game of the run gets no
+    such help, which is where "nothing is awarded below 1500" is measured.
+
+    Sweeping and firing for the reason scenario_speed_up gives, at one press every 30
+    frames because that is about how long a shot takes to reach the fleet and because it is
+    what keeps a run this long inside the cart's single-bank limit.
+
+    Lives topped up (L056), and the forcing is a top-up rather than an assignment precisely
+    so a life the game gives is a life that stays given. That top-up also means a life
+    count that *rises* is evidence of nothing - it rises after every death. What the
+    forcing cannot produce is a count above its own ceiling, and that is what is read here.
+    """
+    script = []
+    for i in range(100):
+        mask = RIGHT if i % 2 == 0 else LEFT
+        script += [(1, mask | FIRE), (29, mask)] * 8
+    played = games(run(script, clear_at=8000, lives=PLAYER_LIVES, rush=UFO_RUSH))
+    scores = [g[-1]["score"] for g in played]
+    print(f"\nsweep and fire through {len(played)} games, watching for the extra ship")
+
+    rich = [g for g in played if g[-1]["score"] >= EXTRA_LIFE_SCORE]
+    ok = check("a game scored its way past the threshold", bool(rich),
+               f"{len(played)} game(s) scoring {scores}, against a threshold of "
+               f"{EXTRA_LIFE_SCORE}")
+    if not rich:
+        return False
+
+    frames = rich[0]
+    crossed = next(i for i, fr in enumerate(frames)
+                   if fr["score"] >= EXTRA_LIFE_SCORE)
+    spare = [(i, fr) for i, fr in enumerate(frames) if fr["lives"] > PLAYER_LIVES]
+    ok &= check(f"crossing {EXTRA_LIFE_SCORE} gives a ship",
+                bool(spare) and spare[0][0] == crossed
+                and spare[0][1]["lives"] == PLAYER_LIVES + 1,
+                f"the count went to {spare[0][1]['lives']} on frame "
+                f"{spare[0][1]['f']}, the frame the score reached "
+                f"{frames[crossed]['score']}" if spare else
+                f"the count never rose above {PLAYER_LIVES} in a game that scored "
+                f"{frames[-1]['score']}")
+    if not spare:
+        return False
+
+    # One stretch rather than several: it ends when the ship it bought is shot down, and
+    # nothing may put the count back above the ceiling afterwards.
+    held = [fr["f"] for _, fr in spare]
+    last = spare[-1][0]
+    ok &= check("it is a ship the player keeps until it is spent",
+                held == list(range(held[0], held[0] + len(held)))
+                and {fr["lives"] for _, fr in spare} == {PLAYER_LIVES + 1},
+                f"{len(held)} frame(s) at {PLAYER_LIVES + 1} lives, frames "
+                f"{held[0]}..{held[-1]}, spent on the next death")
+    ok &= check("and it is given once a game, not once per crossing",
+                all(fr["lives"] <= PLAYER_LIVES for fr in frames[last + 1:]),
+                f"no second ship in the {len(frames) - last - 1} frames after it was "
+                f"spent, over which the score went from {spare[-1][1]['score']} to "
+                f"{frames[-1]['score']}")
+    ok &= check("the award is remembered rather than the score it was made at",
+                all(fr["extra"] for fr in frames[crossed:])
+                and not any(fr["extra"] for fr in frames[:crossed]),
+                f"the flag was clear for {crossed} frames below {EXTRA_LIFE_SCORE} and "
+                f"set for the {len(frames) - crossed} above it")
+
+    poor = [g for g in played if g[-1]["score"] < EXTRA_LIFE_SCORE]
+    ok &= check("a game that never reaches the threshold is never given one",
+                all(fr["lives"] <= PLAYER_LIVES for g in poor for fr in g),
+                f"{len(poor)} game(s) scoring {[g[-1]['score'] for g in poor]} and none "
+                f"of them above {PLAYER_LIVES} lives")
+    ok &= check("and the next game starts without the one before it",
+                all(g[0]["lives"] == PLAYER_LIVES and not g[0]["extra"] and
+                    g[0]["score"] == 0 for g in played),
+                f"all {len(played)} game(s) opened at {PLAYER_LIVES} lives, no flag, "
+                f"score 0")
+    return ok
+
+
+def scenario_high_score():
+    """MISSION.md section 5's other half: the high score persists across sessions via pmem.
+
+    Two consoles. The first is handed an empty slot (L056 - a game played before this
+    console was launched is the one piece of state no script can reach), scores, and ends;
+    the second is launched with the slot as the first left it. Nothing but the saved slot
+    connects them, which is what makes this a test of pmem rather than of a field."""
+    # The landing is forced late and the run given room after it: an idle ship under the
+    # fleet is usually part way through a death pause by then, and the landing is only read
+    # in state_playing. What ends the game does not matter here - both ways write the slot.
+    land, total = 150, 400
+    landing_y = FLEET_LANDING_Y - (FLEET_ROWS - 1) * FLEET_ROW_SPACING
+    played = run([(1, FIRE), (total - 1, IDLE)], hi=0,
+                 fleet_at=(land, FLEET_X_MAX, landing_y))
+    print(f"\nplay a game with an empty saved slot, then launch a second console")
+
+    ok = check("an empty slot reads as no high score", played[0]["hi"] == 0,
+               f"HI {played[0]['hi']} on the first frame, from a slot written to 0 before "
+               f"the cart booted")
+    scored = played[-1]["score"]
+    ok &= check("the game scored something to save", scored > 0,
+                f"{scored} points, and the game ended in "
+                f"{played[-1]['state']}")
+    ok &= check("the high score climbs with the score, not at the end of the game",
+                all(fr["hi"] == fr["score"] for fr in played),
+                f"HI tracked the score to {played[-1]['hi']} across all {len(played)} "
+                f"frames")
+    ok &= check("the game ended, which is when the slot is written",
+                played[-1]["state"] == "GAME_OVER",
+                f"state {played[-1]['state']} on the last frame")
+    if played[-1]["state"] != "GAME_OVER" or not scored:
+        return False
+
+    reopened = run([(30, IDLE)], title=True)
+    ok &= check("a fresh console reads the score the last one saved",
+                reopened[0]["hi"] == scored,
+                f"HI {reopened[0]['hi']} on the first frame of a new console, against the "
+                f"{scored} the previous game ended on")
+    ok &= check("and it is on the title screen before a shot is fired",
+                reopened[0]["state"] == "TITLE" and reopened[0]["score"] == 0,
+                f"TITLE with score {reopened[0]['score']} and HI {reopened[0]['hi']}")
+    return ok
+
+
 def main():
     ok = True
     ok &= scenario_move(LEFT, "left", lambda f: max(X_MIN, START_X - f))
@@ -1774,6 +2291,12 @@ def main():
     ok &= scenario_ufo_shot_down()
     ok &= scenario_ufo_thin_fleet()
     ok &= scenario_ufo_freezes_on_death()
+    ok &= scenario_title_screen()
+    ok &= scenario_full_loop()
+    ok &= scenario_wave_transition()
+    ok &= scenario_wave_difficulty()
+    ok &= scenario_extra_life()
+    ok &= scenario_high_score()
     print("\nall scenarios passed" if ok else "\nsome scenarios failed")
     sys.exit(0 if ok else 1)
 

@@ -70,6 +70,15 @@ print(text, [x=0], [y=0], [color=15], [fixed=false], [scale=1], [smallfont=false
 **Returns the rendered width in pixels.** Use that return to center text rather than
 hardcoding an offset.
 
+Measured in-console 2026-08-18 (`scratch/font.lua`, `scratch/font2.lua`, read back through
+`peek4`): the default font draws every glyph in a **6 px wide cell, 6 rows tall**, and
+`fixed = true` makes that width uniform — `"SCORE 00000"` is 66 px fixed against 64 px
+proportional, `"W"` is 6 px and `"i"` is 3 px proportional, and descenders in `gjp` stay
+inside the six rows. The small font is 4 px wide. Because the fixed cell is exactly 6 px,
+`game.lua` centres by arithmetic (`#text * FONT_W * scale`) rather than by drawing once off
+screen to read the width back; fixed width is also what stops the score jittering as its
+digits change.
+
 **Gotcha:** the default `color=15` is dark navy (`#333C57`) in SWEETIE-16, which is
 near-invisible against the default black `cls()`. Always pass a color explicitly.
 
@@ -204,6 +213,31 @@ poke4(addr4, val4)
 
 Returns nothing. `game.lua` uses `poke4` to blit its sprite sheet into tile RAM at boot;
 `tools/` uses `poke` to write the gamepad byte.
+
+### `pmem`
+
+Read 2026-08-18 from https://github.com/nesbox/TIC-80/wiki/pmem
+
+```lua
+pmem(index)        -> val32   -- read
+pmem(index, val32) -> val32   -- write, returning the value that was there before
+```
+
+- `index` — slot, integer 0..255. There are 256 slots.
+- `val32` — 32-bit **unsigned** integer, 0..4294967295. Omitting it makes the call a read.
+
+**Returns the prior value on a write**, not the value written. A slot never written reads
+as 0.
+
+**Gotcha, and the reason the cartridge header matters:** saved data is keyed on an MD5
+hash of the script by default, so *editing the cart erases the save*. Declaring
+`-- saveid:` in the metadata header overrides that and keys the data on the string
+instead. `game.lua` carries `-- saveid: STAUROSINVADERS`, which is what lets a high score
+outlive an edit.
+
+Verified in-console 2026-08-18 by `scenario_high_score` in `tools/inputsim.py`: a slot
+written to 0 before boot reads back as 0, a game that scored 10 and ended wrote 10, and a
+second console launched afterwards read 10 out of the slot on its first frame.
 
 ---
 

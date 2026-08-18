@@ -30,6 +30,7 @@ grep -nE '\b(require|dofile|loadfile|io\.|os\.|package\.|collectgarbage)' game.l
 grep -nE 'while +true|repeat' game.lua                                        # L003
 grep -nE '(^|[^-])//|[^:]goto |<<|>>|math\.type|<close>' game.lua             # L005
 grep -n 'DEBUG *= *true' game.lua                                             # L041
+grep -nE '^\s*print\(' game.lua | grep -v 'print(text, x, y, color, true, scale, false)'  # L008
 [ game.tic -nt game.lua ] || echo "L050: game.tic is stale, run python3 pack.py"
 ```
 
@@ -114,7 +115,13 @@ argument after it. Never rely on a default you have not read in `docs/tic80-api.
 ### L008 — every draw call names its color
 `print`, and any later `spr`/`rect`/`line`, pass an explicit color constant. `print`
 defaults to color 15, which is dark navy in SWEETIE-16 and invisible against the black
-the game clears to. Nothing errors; the text simply is not there. **Read.**
+the game clears to. Nothing errors; the text simply is not there. **Automated + read.**
+
+*Automated 2026-08-18 during M7, when the cart drew text for the first time. Every `print`
+in `game.lua` goes through the single call inside `print_fixed()`, which names its color
+and its `fixed` flag; the grep in the pass finds any other. A funnel is checkable where
+"pass a color" is not, and it buys the fixed-width flag for free — the flag that stops the
+score jittering as its digits change.*
 
 ### L009 — no allocation in the frame path
 No table constructor (`{}`) evaluated inside `TIC()` or anything it calls per frame.
@@ -132,8 +139,13 @@ calls (`TIC`, `BOOT`), a documented TIC-80 API function, a Lua stdlib table (`ma
 accidental global from a missing `local` — which in TIC-80 persists across frames and
 produces bugs that look like corruption. `AGENTS.md` §2, §5. **Automated + read.**
 
-Current allowlist: `TIC`, `BOOT`, `game`, `math`, `ipairs`, `_VERSION`, plus documented
-API calls.
+Current allowlist: `TIC`, `BOOT`, `game`, `math`, `string`, `ipairs`, `_VERSION`, plus
+documented API calls.
+
+*Amended 2026-08-18 during M7: `string` added, and `pmem` and `print` appear among the API
+calls. `string` is a stdlib table like `math` — it arrives with `string.format`, which is
+what pads the score to five digits; `s:sub()` had been used since M0 without ever putting
+the table in `_ENV`, because a method call on a string goes through the metatable instead.*
 
 *Amended 2026-08-16: `_VERSION` added. It is a read-only Lua stdlib global, not an
 accidental one, and it appears in the `_ENV` output because `BOOT()` traces it under
@@ -457,6 +469,39 @@ rule is about not encoding absence as a value, this one about not discarding ide
 *Added 2026-08-17 during M5. The reasoning had been derived twice already — once for
 `kills()` in M3, once for `row_masks()` in M2 — without being written down, so M5 rederived
 it a third time before tracing 32 bunker row masks instead of 4 live-cell counts.*
+
+### L061 — a scenario says which game it is measuring
+A run can now outlive the game it started in. Any scenario reading a whole trace as one
+game — a score that only climbs, a fleet that only thins, a step schedule reconstructed
+from frame one — slices the run into games first and measures one of them. `games()` and
+`first_game()` in `tools/inputsim.py` are that slice. **Read.**
+
+*Added 2026-08-18 during M7. Before it, a game over was where a run stopped mattering, so
+scenarios read to the last frame. Now fire takes a game over back to the title and the next
+press starts a second game, which any script that taps fire supplies within a few frames.
+`scenario_speed_up` failed on `1 unscheduled step` at frame 7991 — a real step, of a real
+fleet, in a game that began 4,000 frames after the one being measured ended. The failure
+named the step schedule; the fault was the scenario's idea of where its subject stopped.
+This is L057 one level up: that rule asks a scenario to assert the state it is measuring,
+this one to assert which run of the game that state belongs to.*
+
+### L062 — a forcing that suppresses the game names the scenarios it belongs to
+L056 governs forcings that *reach* a state input cannot. A forcing that *holds the game
+back* from a state it would reach on its own is a different thing and a worse one: it does
+not stand in for any player action, so it cannot be justified the way L056 justifies the
+others. Where one is unavoidable, it is confined to scenarios whose subject predates the
+behaviour being suppressed, the suppression is a single named line rather than a policy
+spread through the probe, and the behaviour itself is measured by a scenario that runs
+without it. **Read.**
+
+*Added 2026-08-18 during M7, for `PROBE_ENDLESS`. Nine scenarios written for M1–M5 clear
+the fleet only to get it out of the way — an empty sky to measure movement, the single
+bullet, or a shield nothing else is shooting at. Since M7 an empty fleet ends the wave and
+the next one arrives, so that empty sky is no longer a state the game can be left in. The
+forcing puts `WAVE_CLEAR` back to `PLAYING` and does nothing else, which is only sound
+because entering `WAVE_CLEAR` sets the state and a timer and nothing else; if the
+transition ever grows work, this rule is the note that says the forcing has to grow with
+it. `scenario_wave_transition` measures the transition without it.*
 
 ## Extending these rules
 

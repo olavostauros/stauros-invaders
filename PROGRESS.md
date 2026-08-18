@@ -23,41 +23,44 @@ Legend: `TODO` · `IN PROGRESS` · `DONE` (verified in-console) · `BLOCKED`
 | M4 | Threat — enemy fire, death, lives, game over | DONE | Verified 2026-08-17 with `tools/inputsim.py`, five new scenarios: over 2,000 frames the fleet fired 76 shells, every uninterrupted gap exactly 25 frames, never more than 2 in the air at once, each falling 2 px/frame from a muzzle that landed on the grid in all eleven columns and freeing its slot by y 136; after a sweep had emptied the bottom of several columns, all 44 shells of a quiet 1,200-frame window came from the bottom-most living invader of their column, across four different rows; a ship jittering under the fleet was hit at x 115 by a shell at (115, 118), lost a life, held for exactly 90 frames of `PLAYER_DEAD` with the timer 90 down to 1, ignored the left/right it was still being given, saw no shell fired at it while dying, and came back at x 116 — the fleet frozen at (48, 20) throughout; three deaths spent three lives and the third ran into `GAME_OVER` 90 frames later, where the fleet, score and sky all stopped for the remaining 2,112 frames; and a fleet placed one drop above the player's row dropped to y 72 and ended the game on that same frame with all three lives still in hand. Observed on screen via `tools/screendump.py`: a yellow shell 1 × 3 px at (167, 98..100), the red explosion 22 px filling the ship's cell at x 116..123, y 120..127 with no green ship and no shells left in the sky, and a game over after the last life with 55 invaders standing and no ship drawn. 60.00 FPS console / 60.48 host differential, moving and firing. Lint pass clean; L057 and L058 added. |
 | M5 | Bunkers — cell-grid erosion, per-wave reset | DONE | Verified 2026-08-17 with `tools/inputsim.py`, five new scenarios: four shields of 74 cells stand at x 19/79/139/199, y 100..115, and nothing erodes one nobody shot at; a shot into bunker 2's arch notch stops inside the band, skips the two dead rows below it and blasts the plus around the *lowest* live cell of its column, leaving the other three shields untouched; ten shots into the same spot drilled a channel — 74 → 70 → 66 → 62 cells, each impact 4 px higher than the last, the fourth flying clean through on frame 250 with 62 of 74 cells still standing, which is "blocks bullets while cells remain" and its converse in one run; 2,500 frames of never firing had 32 shells absorbed for 93 cells, every one stopping between y 96 and 106 and every blast centred on the *highest* live cell of its column, the mirror of the player's erosion; and a fleet placed with its bottom row inside the band erased all 90 cells under it and exactly those — 212 left standing outside the footprint, nothing touched beyond it. Observed on screen via `tools/screendump.py`: four 22 px arches with their legs, 1,219 px of color 5 being exactly 35 of ship plus 4 × 74 × 4 of cell; and after 500 frames of sweeping fire, bunker 3 chewed to fragments and bunker 4's roof bitten open. 60.00 FPS console / 60.47 host differential with 296 cells drawn a frame, moving and firing. All 17 M1–M4 scenarios re-run and passing, and the full 22 ran clean three times end to end — 101 assertions, 0 failures — after two pre-existing RNG-deadline flakes were found and fixed (§3). Lint pass clean; L059 and L060 added. |
 | M6 | Mystery ship — spawn timing, traversal, bonus | DONE | Verified 2026-08-18 with `tools/inputsim.py`, six new scenarios: a saucer crosses the lane at y 10..17, entering at x -16 heading right — the first of a game always from the left — carrying one bonus for all 256 frames of the crossing with the wait held at 0 throughout; over an unforced 3,500 frames three intervals were rolled, 1243, 1210 and 999, every one inside the 900..1500 band, the count-down falling exactly one frame at a time and stopping with the game, and each saucer arriving on the frame its own count reached zero; eight complete crossings alternated sides strictly, entered a full 16 px off screen at both ends, moved only ±1 px a frame, ran 256 moving frames whichever side they came from, spanned x -16..239 and -15..240, left the screen rather than parking on it, and carried all four of 50/100/150/300; a ship parked at the left edge tapping fire for 8,996 frames saw 32 crossings and shot 7 down, each scoring exactly the bonus that saucer was carrying, none of them also thinning the fleet, the bullet spent every time and a fresh in-band interval rolled the moment it died; eight invaders left standing produced no saucer across 2,240 playing frames with the timer held at 1049 and never moving, while nine produced one; and of seven deaths, six began with a saucer up, which held its x, its bonus and its liveness across 540 frozen frames and resumed to a crossing still 256 moving frames long. Observed on screen via `tools/screendump.py`: 66 px of color 2 at x 0..15, y 10..16 — exactly the two tiles' lit pixels from `SPRITE_SHEET` — with the non-black bounding box's top moved from y 20 to y 10, beside 2,200 px of white that is the full 55-invader fleet in waddle frame 1 and 1,015 of green that is 35 of ship plus 245 bunker cells of 4; and during a death, 88 px of red being 66 of saucer plus 22 of explosion, with 568 of green accounting for 142 cells and no ship. 59.99 FPS host differential over frames 1,200..2,400, a window measured to hold a full crossing under the same held mask, console 59.998–60.001. All 22 M1–M5 scenarios re-run and passing, and the full 28 ran clean six times end to end — 148 assertions, 0 failures. Lint pass clean; L016, L052 and L059 amended. |
-| M7 | Shell — title, game over, wave transitions, HUD, `pmem`, extra life | TODO | |
+| M7 | Shell — title, game over, wave transitions, HUD, `pmem`, extra life | DONE | Verified 2026-08-18 with `tools/inputsim.py`, six new scenarios: the cart boots on a title screen where the fleet, the score, the sky and the saucer's own wait all hold still through 90 frames — one step a playing fleet would have taken — and A starts a game on the frame it is pressed, 55 invaders at y 20 with 296 bunker cells and three lives; the full loop runs title → play → game over → title → play again in one trace, the landing ending a game that had scored 10, the game over holding everything frozen for 60 frames until A takes it back to the title, and the second game opening at score 0 with the high score of the first still on the HUD; a wave ends in exactly 120 frames of `WAVE_CLEAR` with the timer 120 down to 1 and nothing moving through it, and then arrives whole on one frame — wave 2, 55 invaders at y 26, 296 cells back from the 274 the last wave was won on, the ship recentred, the sky cleared, no saucer up and its wait rolled at 1485 inside the 900..1500 band; the second wave starts a drop lower, marches every 50 frames instead of 55 and fires every 23 instead of 25, each against the curve rather than against "faster"; a game that scored 3,220 was given one extra ship on the frame it reached 1,530 and kept it for 1,279 frames until it was shot down, with no second ship over the 8,332 frames it took the score to 3,220 and none at all in a second game that scored 1,370; and a console handed an empty `pmem` slot scored 10, ended, and a second console launched afterwards read 10 out of the slot on its first frame. Observed on screen via `tools/screendump.py`: the title at 968 px of green across x 24..213 with the HI line and the prompt below it and no entity anywhere; the HUD band inside y 0..6 — SCORE at x 2, HI at 96, LIVES at 160 and three ship sprites at 192, 200 and 208; "WAVE 2" over the held field with all four shields standing and the ship still where it was; and "GAME OVER" in red over a fleet that is still there either side of it, the banner having cleared its own box out of the invaders behind it. 59.998–60.000 FPS console / 60.36 host differential over frames 1,200..2,400 with the HUD's four `print` calls and three extra `spr` calls on top of M6's worst case. All 28 M1–M6 scenarios re-run and passing, and the full 34 ran clean four times end to end — 193 assertions, 0 failures — after three flakes of the suite's own making were found and fixed (§3). Lint pass clean; L008 automated, L010 amended, L061 and L062 added. |
 | M8 | Audio and polish — SFX, fleet loop, explosions, perf pass | TODO | |
 
-**Current position:** M6 complete and verified in-console. A saucer crosses the lane above
-the fleet every 15 to 25 seconds, entering from alternating sides, carrying a bonus of 50,
-100, 150 or 300 that it hands over when a shot brings it down. Nothing is blocked; M7 (the
-shell — title screen, game over, wave transitions, HUD, `pmem` high score, extra life) is
-next, and it is the largest milestone remaining.
+**Current position:** M7 complete and verified in-console. The game is a game: it opens on
+a title screen, plays waves that start lower and press harder than the one before, pauses
+between them, gives a ship at 1,500 points, ends when the lives or the sky run out, and
+goes back to the title with a high score that outlives the console. M8 — audio and polish —
+is all that is left, and it is the first milestone that needs the SFX editor rather than
+the framebuffer.
 
-The prediction M5 left about M6 was wrong, and mechanically so. The `_ENV` list was expected
-to gain a name; it is unchanged for the fifth milestone running — `BOOT`, `TIC`, `btn`,
-`btnp`, `cls`, `game`, `ipairs`, `math`, `poke4`, `rect`, `spr`. The saucer draws with a
-`spr` whose signature has been recorded since M1 and picks with `math.random`, so M6 added
-no TIC-80 call at all. L011 was run first rather than last anyway, which is what turned that
-from an assumption into a measurement.
+`MISSION.md` §8's acceptance for M7 was "the full loop title → play → game over → title
+runs without a restart", and `scenario_full_loop` is that sentence: one trace, four
+transitions, all four of them a button press.
 
-**Two resets are now built and undriven, not one.** `reset_ufo()` joins `reset_bunkers()`:
-both are split out precisely so a wave can restart without allocating mid-frame (L009), both
-are called from `BOOT()` and verified there, and neither has anything calling it at the
-moment a wave ends, because `WAVE_CLEAR` does not exist until M7. `MISSION.md` §3 requires
-both — shields reset per wave, and no saucer present during a wave transition — so M7's
-transition should assert that the shields come back full after a wave that eroded them, and
-that no saucer is up on the first frame of a new one with a fresh interval rolled.
+The prediction M6 left about the `_ENV` list finally broke, after five milestones of being
+wrong the other way. It gained three names at once — `pmem`, `print` and `string` — because
+M7 is the first milestone that draws text and the first that writes anything down. `string`
+is the interesting one: `s:sub()` has been used since M0 without ever putting the table in
+`_ENV`, because a method call on a string goes through the metatable; `string.format` is
+what put it there.
 
-Three things M7 inherits. **`UFO_FLEET_MIN` is load-bearing in a way its own line does not
-show:** suppressing the saucer below nine invaders also means every `clear_at` scenario in
-the suite is saucer-free for free, which is why M6 disturbed exactly one existing scenario
-out of 22. Anyone who changes that threshold is changing ten scenarios' assumptions, not one
-constant. **`game.score` now has two writers**, so any M7 work touching scoring — the extra
-life at 1,500, the HUD, the `pmem` high score — has to account for a bonus as well as a row
-value; `scenario_score_by_row` shows the shape, reading the bonuses out of the trace and
-adding them to what the survivors account for. And **`state_game_over()` and
-`state_player_dead()` now draw four kinds of entity without updating any of them**, which is
-where the freeze lives: it is the absence of an update call rather than a flag, so M7's new
-states have to be written the same way or the saucer will start moving on the title screen.
+**Both undriven resets are now driven, and the open question they left is closed.**
+`reset_bunkers()` and `reset_ufo()` are called from `reset_wave()`, which the transition
+runs when its pause ends, and `scenario_wave_transition` asserts both: 296 cells back from
+the 274 the wave was won on, and no saucer up with a fresh in-band interval on the first
+frame of wave 2. `reset_fleet()` joined them, split out of `build_fleet()` for the same
+L009 reason.
+
+Two things M8 inherits. **The harness now has to say which game it is measuring** — a game
+over is no longer where a run stops, because fire takes it back to the title and the next
+press starts another. `games()` and `first_game()` are that slice, L061 is the rule, and
+any new scenario that reads a score climbing or a fleet thinning has to use them. And
+**`PROBE_ENDLESS` is a forcing that suppresses the game rather than reaching it** (L062):
+nine pre-M7 scenarios clear the fleet only to get it out of the way, and an empty sky is no
+longer a state the game can be left in. It is sound only because entering `WAVE_CLEAR` sets
+a state and a timer and nothing else. If M8 hangs a sound or an animation off that
+transition, the forcing has to grow with it or those nine scenarios will quietly start
+measuring something else.
 
 ---
 
@@ -122,6 +125,15 @@ Verified 2026-08-16, fourth pass — input simulation:
 | Scripted scenarios | `python3 tools/inputsim.py` runs seven scenarios against the game's own state and reports pass/fail. `--hold` also added to `screendump.py` and `fpscheck.py` |
 | Keystroke injection | Still impossible. WSLg takes input from the Windows side; `xdotool`/`ydotool`/`wtype` are absent and `/dev/uinput` would not reach the compositor anyway |
 
+Verified 2026-08-18, fifth pass — persistence and cart size:
+
+| Check | State |
+|---|---|
+| `pmem` across sessions | Works. A slot written by one `tic80` process is read back by the next: `scenario_high_score` writes 0 into slot 0 before boot, plays a game worth 10, and a second console launched afterwards reads 10 on its first frame. The header's `-- saveid: STAUROSINVADERS` is what makes this survive an edit to `game.lua` (`docs/tic80-api.md`) |
+| Where the save lands | Under `.local/` in the repo, because the console is run with `--fs=.`. Already gitignored; nothing to add, but note that the suite is therefore **stateful across runs** — every scenario that reaches a game over leaves a high score behind, which is why the one scenario that cares forces the slot rather than assuming it |
+| Cart size | 32,696 bytes, **49.9% of one bank**. The 64 KB cap is not close, but `scratch/input.lua` is: `tools/inputsim.py` appends its script table to the cart, and a run of 4,320 segments overflowed at 68,507 bytes. Long scenarios buy frames per segment, not segments |
+| Font metrics | Measured in-console rather than recalled: every glyph of the default font occupies a **6 px cell, six rows tall**, `fixed` or not, and the small font is 4 px. Recorded under `print` in `docs/tic80-api.md`; `FONT_W` in `game.lua` is that measurement |
+
 Syntax-only fallback, which is **not** a test — label results *syntax verified,
 behavior unverified* (`AGENTS.md` §3). Note it checks 5.4 against a 5.3 console:
 
@@ -135,6 +147,88 @@ luac5.4 -p game.lua
 
 Newest first. Record the *why*, not just the *what*.
 
+- **2026-08-18 — `add_score()` is the only writer of `game.score`, and that is what makes
+  the extra life possible at all.** M6 left a note that the score had acquired a second
+  writer; M7 would have given it a third and a fourth (the HUD reads it, `pmem` saves it,
+  and the extra life has to watch it cross a line). Funnelling every point through one
+  function means the running high score and the once-a-game ship both hang off the same
+  three lines, and neither can be missed by a scoring path added later. It also made the
+  scenario possible: the award is observable precisely because nothing else can grant a
+  life.
+- **2026-08-18 — the wave ramp is three independent curves with three floors, not one
+  difficulty number.** `MISSION.md` §4 asks for a lower start, a tighter march and a faster
+  gun, and the temptation is one `difficulty(wave)` feeding all three. They are kept apart
+  because they trade against each other and because each has a different reason to stop:
+  the start is capped at y 52 by geometry — a wave whose bottom row opened inside the
+  shields would crush them on frame 1 — while the march floors at 30 frames and the gun at
+  15 for feel, which is a guess. A shared cap would have hidden the fact that only one of
+  the three is derived.
+- **2026-08-18 — the step curve's *top* moves per wave and its bottom does not.** A full
+  fleet steps every 55 frames in wave 1 and 50 in wave 2; the last invader steps every 2
+  frames in both. Lowering the whole line would have made the endgame of wave 5 unplayable
+  while barely changing its opening, and one invader is one invader whenever it is met.
+- **2026-08-18 — `reset_wave()` and `reset_game()` do not set the state.** They put a fresh
+  wave or a fresh game in the tables and leave the state machine to say when it is being
+  played, which is what lets `BOOT()` build a whole game and leave it sitting behind the
+  title screen without a line that sets `PLAYING` and another that immediately undoes it.
+- **2026-08-18 — the wave transition does its work at the end of the pause, not the
+  start.** Entering `WAVE_CLEAR` sets a state and a timer and nothing else, so the pause
+  draws the field the wave was actually won on — the eroded shields, the ship where it was
+  standing — and the new wave arrives whole on one frame. That is also the only reason
+  `PROBE_ENDLESS` can be a one-line forcing (L062), and the note to read before hanging
+  anything off the transition in M8.
+- **2026-08-18 — "no saucer during a wave transition" is read as: not drawn, not updated,
+  and gone before the next wave starts.** `MISSION.md` §3 asks that one never be *present*
+  during a transition. `state_wave_clear()` draws no saucer and updates none, and
+  `reset_wave()` clears it, so nothing is on screen during the pause and no wave opens with
+  one. What is not done is despawning it on the frame the wave ends — the flag can still
+  read live through a pause nobody can see it in. Doing that would put work into entering
+  `WAVE_CLEAR` and cost the forcing above its one line, for a difference no player can
+  observe.
+- **2026-08-18 — centred text clears a box behind itself.** Found by looking, not by
+  reasoning: the first `tools/screendump.py` of a game over came back with "GAME OVER"
+  drawn straight through a fleet that had marched down to y 60, both illegible. The fleet
+  can be anywhere on the screen when a game ends, so no fixed banner position is safe and
+  the fix belongs in the text helper rather than in a coordinate. It clears the text's own
+  box plus 2 px, not the full screen width, so the invaders either side of the banner
+  survive. This is exactly the failure L051 exists for — a clean run and passing scenarios
+  said nothing about it.
+- **2026-08-18 — the game over goes back to the title, not straight into a new game.**
+  `MISSION.md` §4 says `A` → `TITLE`, and the reason is worth keeping: the score stays on
+  screen until someone chooses to leave it. It costs a second press, which is what
+  `scenario_full_loop` traces.
+- **2026-08-18 — three flakes were the suite's own, and all three were the same mistake.**
+  None was in the cart, and all three were a window measured in the wrong clock.
+  `scenario_speed_up` failed on an unscheduled fleet step 4,000 frames after the game it
+  was measuring had ended — a real step of a real fleet in the *next* game, because a
+  script that taps fire walks a game over back to the title and starts another (L061,
+  `games()`/`first_game()`). `scenario_title_screen` failed with "the fleet took 0 steps"
+  over a window a 90-frame death pause had swallowed whole. And `scenario_wave_difficulty`
+  failed with an *empty* list of step gaps: it dropped every gap a pause touched, and a
+  400-frame window holds only seven steps, so one death took all of them. The last two have
+  the same fix, and it is the one the saucer scenarios already used and this one did not —
+  **an interval is a count of playing frames, not of frames**, because every timer in the
+  game advances inside `state_playing` and nowhere else. `playing_between()` had said so
+  since M6. The exception is the fire timer, which `kill_player()` resets, so its gaps still
+  drop the ones that span a death. This is the fourth fixed-deadline flake in the suite's
+  history (§3, M5) and the second in a row whose fix was the right clock rather than a
+  longer deadline.
+- **2026-08-18 — the extra life needed a forced wave clear to be measurable, and the
+  measurement says why.** Six unaided games scored 1210, 1420, 1360, 1330, 1470 and 30
+  against a threshold of 1500: a sweeping ship does not quite clear wave 1 before the fleet
+  lands on it at about ten thousand frames, and one wave holds only 990 points of invaders.
+  Killing the last few on frame 8000 (L056) stands in for the shots that finish a wave, and
+  the game plays on into wave 2 for a score of 3,000-4,200. The run's *second* game gets no
+  such help and is where "nothing is awarded below 1500" is measured. The interesting half
+  is the number this produced: **1,500 is more than a wave is worth**, which is an open
+  question below rather than a bug.
+- **2026-08-18 — `PROBE_LIVES` became a top-up rather than an assignment.** It wrote the
+  life count every frame, which meant a life the game *gave* was taken straight back and
+  the extra life was invisible to every scenario that could afford to run long enough to
+  earn one. Nothing could add a life before M7, so every earlier scenario ran under
+  identical behaviour. The assertions still do not read a life count that rises — that
+  happens after every death — they read one *above the forcing's own ceiling*, which only
+  the game can produce.
 - **2026-08-18 — The saucer is 16 px of one composite `spr()`, and that is the first thing
   in the project no lint grep can see.** The width was the user's call, taken before the
   work started: an 8 px saucer would have read as another invader in a different lane. One
@@ -663,7 +757,17 @@ Per `AGENTS.md` §4.5: state the question, implement around it under a clearly s
 assumption, and record the assumption here. Mark answered ones `RESOLVED:` with the
 answer and its source; do not delete them.
 
-- **OPEN: Do the bunkers and the saucer actually reset at the start of each wave?**
+- **RESOLVED 2026-08-18: Do the bunkers and the saucer actually reset at the start of each
+  wave?** **Yes, and it is now measured rather than inspected.** M7's `WAVE_CLEAR` gave
+  both resets a caller: `reset_wave()` runs `reset_fleet()`, `reset_bunkers()`,
+  `reset_ufo()` and `clear_bullets()` on the frame the transition's pause runs out.
+  `scenario_wave_transition` in `tools/inputsim.py` chews a shield open, empties the fleet,
+  and reads the first frame of wave 2 off the trace: 296 cells back from the 274 the wave
+  was won on, no saucer up, its wait rolled at 1485 inside the 900..1500 band, the sky
+  cleared and the ship recentred. The question below it — the original, kept per the rule
+  that answered questions are marked rather than deleted — is what this replaces.
+- **OPEN (superseded by the entry above, kept as the record of what was once unknown): Do
+  the bunkers and the saucer actually reset at the start of each wave?**
   `MISSION.md` §3 says the shields reset per wave and that the saucer is never present during
   a wave transition, and neither M5 nor M6 **can test it**: there is no wave transition until
   M7's `WAVE_CLEAR`, and `reset_bunkers()` and `reset_ufo()` are `local`s that
@@ -675,6 +779,29 @@ answer and its source; do not delete them.
   2026-08-18, when `reset_ufo()` joined them. Closes with M7's wave transition, which should
   assert that the shields come back full after a wave that eroded them, and that no saucer is
   up on the first frame of a new wave with a fresh interval rolled.
+- **OPEN: Is 1,500 the right extra-life threshold, when a whole wave is worth 990?** It is
+  `MISSION.md` §5's own figure and is implemented as written, but the measurement M7 needed
+  to test it is the argument against it: six unaided games scored 1210, 1420, 1360, 1330,
+  1470 and 30, every one of them short, because a wave holds 990 points of invaders and a
+  player has to get well into a second one to reach 1500. That is arguably right — the
+  arcade's extra ship was an achievement — but it means the reward for surviving a wave
+  arrives in the middle of the next, which is a strange place for it. `EXTRA_LIFE_SCORE` is
+  a one-line change; 1000 would put it at the end of a cleared first wave, and 1500 keeps
+  it out of reach of anyone who does not clear one. Only playing settles which reads
+  better.
+- **OPEN: Is 120 frames the right wave pause, and should the banner name the wave that is
+  coming?** Two seconds is long enough to read "WAVE 2" and short enough not to be a
+  loading screen, but it is reasoned rather than felt, and it is two seconds in which the
+  player has nothing to do. The banner names the *next* wave rather than announcing the one
+  just cleared, on the grounds that what is useful is what is about to happen;
+  `WAVE_CLEAR_FRAMES` and the one string are the tunables.
+- **OPEN: Does the wave ramp hold up past wave 3, and are its two floors in the right
+  place?** `MISSION.md` §4 requires difficulty to ramp without becoming unwinnable by wave
+  3, and wave 3 is measurably gentle: y 32, a step every 45 frames at full fleet, a shell
+  every 21. What nothing here can say is where it stops being fair. The march floors at 30
+  frames and the gun at 15 — both guesses, unlike the start height, which is derived from
+  the shields' position. Reaching wave 6 to find out takes about ten minutes of competent
+  play, which is exactly the kind of thing this environment cannot do.
 - **OPEN: Is 1 px a frame the right saucer speed?** It is the ship's own speed, which means
   catching the saucer requires leading it by the 51 frames a bullet takes to climb from the
   muzzle to the lane — a skill shot rather than a gift. Measured, not felt: a parked ship

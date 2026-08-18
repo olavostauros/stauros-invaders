@@ -149,6 +149,48 @@ local UFO_POINTS = {
   300,
 }
 
+-- Measured in-console 2026-08-18: the default font draws every glyph in a six pixel cell
+-- six rows tall, so text is centred by arithmetic rather than by drawing it once off
+-- screen to read print()'s width back.
+local FONT_W = 6
+local FONT_H = 6
+local SCORE_FORMAT = "%05d"
+local HUD_Y = 0
+local HUD_SCORE_X = 2
+local HUD_HI_X = 96
+local HUD_LIVES_X = 160
+local HUD_LIVES_ICON_X = 192
+-- The extra life can put a fourth ship on the row, and the band has room for five.
+local HUD_LIVES_MAX = 5
+
+local GAME_TITLE = "STAUROS INVADERS"
+local BANNER_SCALE = 2
+local TITLE_Y = 44
+local TITLE_HI_Y = 68
+local TITLE_PROMPT_Y = 92
+local BANNER_Y = 60
+local BANNER_PROMPT_Y = 78
+-- Margin cleared around a centred line. The fleet can be anywhere on the screen when a
+-- game ends, and white invaders behind red text leave neither readable.
+local BANNER_PAD = 2
+
+local EXTRA_LIFE_SCORE = 1500
+-- One of pmem's 256 slots. The header's saveid is what keeps it across edits to the cart:
+-- without one the console keys saved data on a hash of the script.
+local HI_SCORE_SLOT = 0
+
+local WAVE_CLEAR_FRAMES = 120
+-- Each wave starts a drop lower than the last, capped so the fleet never starts inside the
+-- shields: a wave that opened with its bottom row in the band would crush them on frame 1.
+local WAVE_DROP_Y = FLEET_DROP_Y
+local FLEET_START_Y_MAX = BUNKER_Y - SPRITE_H - (FLEET_ROWS - 1) * FLEET_ROW_SPACING
+-- Both difficulty curves tighten per wave and both have a floor, because a ramp with no
+-- bottom is unwinnable by wave five rather than merely hard.
+local WAVE_FIRE_STEP = 2
+local ENEMY_FIRE_FRAMES_MIN = 15
+local WAVE_STEP_TIGHTEN = 5
+local FLEET_STEP_FRAMES_FLOOR = 30
+
 -- The cart carries no sprite sheet chunk, so the sheet is drawn here and blitted into
 -- tile RAM at boot. A '#' takes the entry's color, anything else stays transparent.
 local SPRITE_SHEET = {
@@ -321,10 +363,18 @@ local STATE = {
 }
 
 game = {
-  state = STATE.PLAYING,
+  state = STATE.TITLE,
   score = 0,
+  -- Read from pmem at boot and written back at game over, so it survives the console
+  -- closing; kept live during play because the HUD shows it climbing past the old one.
+  hi = 0,
+  wave = 1,
   lives = PLAYER_LIVES,
+  -- The extra life is once a game, so what is remembered is that it was given rather
+  -- than the score it was given at.
+  extra_life = false,
   death_timer = 0,
+  wave_timer = 0,
   player = { x = PLAYER_START_X, y = PLAYER_Y },
   bullet = { x = 0, y = 0, active = false },
   -- A fixed pool filled in BOOT() rather than a list that grows: the cap on shots in the
@@ -377,12 +427,43 @@ end
 
 local function build_fleet()
   for row = 1, FLEET_ROWS do
-    local cells = {}
+    game.fleet.alive[row] = {}
+  end
+end
+
+-- The wave curve, in one place. Each is clamped at its own floor rather than at a shared
+-- wave number, so the three ramps can be tuned against each other without a cap moving.
+local function wave_fleet_y()
+  return math.min(FLEET_START_Y + (game.wave - 1) * WAVE_DROP_Y, FLEET_START_Y_MAX)
+end
+
+local function wave_fire_frames()
+  return math.max(ENEMY_FIRE_FRAMES - (game.wave - 1) * WAVE_FIRE_STEP,
+                  ENEMY_FIRE_FRAMES_MIN)
+end
+
+local function wave_step_frames_max()
+  return math.max(FLEET_STEP_FRAMES_MAX - (game.wave - 1) * WAVE_STEP_TIGHTEN,
+                  FLEET_STEP_FRAMES_FLOOR)
+end
+
+-- Kept apart from the allocation above for the same reason reset_bunkers() is: a wave
+-- restarts inside a frame, and a table constructor there is what L009 forbids.
+local function reset_fleet()
+  local fleet = game.fleet
+  for row = 1, FLEET_ROWS do
+    local cells = fleet.alive[row]
     for col = 1, FLEET_COLS do
       cells[col] = true
     end
-    game.fleet.alive[row] = cells
   end
+  fleet.count = FLEET_COUNT
+  fleet.x = FLEET_START_X
+  fleet.y = wave_fleet_y()
+  fleet.dir = 1
+  fleet.timer = 0
+  fleet.frame = 0
+  fleet.fire_timer = 0
 end
 
 local function build_bunkers()
@@ -431,6 +512,39 @@ local function clear_bullets()
   game.bullet.active = false
   for _, bullet in ipairs(game.enemy_bullets) do
     bullet.active = false
+  end
+end
+
+-- Everything a wave owns, restored together. Called when the transition ends rather than
+-- on the frame the last invader died, so the pause draws the field the player left behind
+-- and the new wave arrives whole on a single frame.
+local function reset_wave()
+  reset_fleet()
+  reset_bunkers()
+  reset_ufo()
+  clear_bullets()
+  game.player.x = PLAYER_START_X
+end
+
+-- Neither of these sets the state: the state machine decides when a fresh game is being
+-- played, which is what lets BOOT() build one and leave it sitting behind the title.
+local function reset_game()
+  game.score = 0
+  game.lives = PLAYER_LIVES
+  game.wave = 1
+  game.extra_life = false
+  reset_wave()
+end
+
+-- The only writer of game.score. The high score climbs with it rather than at game over,
+-- because the HUD shows the two racing; the extra life hangs off the same crossing, and
+-- there are two sources of points for it to be missed by.
+local function add_score(points)
+  game.score = game.score + points
+  if game.score > game.hi then game.hi = game.score end
+  if not game.extra_life and game.score >= EXTRA_LIFE_SCORE then
+    game.extra_life = true
+    game.lives = game.lives + 1
   end
 end
 
@@ -502,7 +616,7 @@ local function enemy_fire()
   local fleet = game.fleet
   if fleet.count == 0 then return end
   fleet.fire_timer = fleet.fire_timer + 1
-  if fleet.fire_timer < ENEMY_FIRE_FRAMES then return end
+  if fleet.fire_timer < wave_fire_frames() then return end
   local bullet = free_enemy_bullet()
   if not bullet then return end
   local col, row = firing_column()
@@ -547,9 +661,11 @@ end
 
 -- A straight line between the two endpoints. The interval has to fall with the living
 -- count rather than with elapsed time, and nothing here can play the game to justify a
--- curvier shape than the one the two endpoints already fix.
+-- curvier shape than the one the two endpoints already fix. Later waves lower the top of
+-- the line and leave its bottom alone: a wave opens faster, and one invader is one
+-- invader whenever it is met.
 local function fleet_step_frames()
-  local span = FLEET_STEP_FRAMES_MAX - FLEET_STEP_FRAMES_MIN
+  local span = wave_step_frames_max() - FLEET_STEP_FRAMES_MIN
   return FLEET_STEP_FRAMES_MIN +
          math.floor((game.fleet.count - 1) * span / (FLEET_COUNT - 1))
 end
@@ -590,6 +706,36 @@ local function update_ufo()
 end
 
 -- entity draw
+
+-- Fixed width, so the width of a line is its length times the cell and a centred line
+-- needs no measuring pass. It is also what stops the score jittering as its digits change.
+local function print_fixed(text, x, y, color, scale)
+  print(text, x, y, color, true, scale, false)
+end
+
+local function print_centered(text, y, color, scale)
+  local width = #text * FONT_W * scale
+  local x = math.floor((SCREEN_W - width) / 2)
+  rect(x - BANNER_PAD, y - BANNER_PAD, width + BANNER_PAD * 2,
+       FONT_H * scale + BANNER_PAD * 2, C_BLACK)
+  print_fixed(text, x, y, color, scale)
+end
+
+local function score_text(label, value)
+  return label .. string.format(SCORE_FORMAT, value)
+end
+
+local function draw_hud()
+  print_fixed(score_text("SCORE ", game.score), HUD_SCORE_X, HUD_Y, C_WHITE, 1)
+  print_fixed(score_text("HI ", game.hi), HUD_HI_X, HUD_Y, C_WHITE, 1)
+  print_fixed("LIVES", HUD_LIVES_X, HUD_Y, C_WHITE, 1)
+  -- One ship per life, so the count reads without being read: the row is what the player
+  -- has left to fly, the ship at the bottom of the screen included.
+  local shown = math.min(game.lives, HUD_LIVES_MAX)
+  for life = 1, shown do
+    spr(SPR_PLAYER, HUD_LIVES_ICON_X + (life - 1) * SPRITE_W, HUD_Y, C_BLACK, 1, 0, 0, 1, 1)
+  end
+end
 
 local function draw_player()
   spr(SPR_PLAYER, game.player.x, game.player.y, C_BLACK, 1, 0, 0, 1, 1)
@@ -767,7 +913,7 @@ local function collide_bullet_fleet()
       if fleet.alive[row][col] and invader_hit(row, col) then
         fleet.alive[row][col] = false
         fleet.count = fleet.count - 1
-        game.score = game.score + FLEET_ROW_POINTS[row]
+        add_score(FLEET_ROW_POINTS[row])
         bullet.active = false
         return
       end
@@ -784,7 +930,7 @@ local function collide_bullet_ufo()
   if not ufo.active or not bullet.active then return end
   if bullet.x < ufo.x + UFO_W and bullet.x + BULLET_W > ufo.x and
      bullet.y < UFO_Y + SPRITE_H and bullet.y + BULLET_H > UFO_Y then
-    game.score = game.score + ufo.bonus
+    add_score(ufo.bonus)
     bullet.active = false
     reset_ufo()
   end
@@ -819,6 +965,13 @@ end
 
 -- game state machine
 
+-- pmem is written once a game rather than once a point: the slot outlives the console
+-- being closed, and nothing can change the score after the last life is spent.
+local function end_game()
+  game.state = STATE.GAME_OVER
+  pmem(HI_SCORE_SLOT, game.hi)
+end
+
 local function kill_player()
   game.lives = game.lives - 1
   game.death_timer = PLAYER_DEAD_FRAMES
@@ -849,12 +1002,18 @@ local function state_playing()
   draw_enemy_bullets()
   draw_fleet()
   draw_ufo()
+  draw_hud()
   -- Landing is read first so it wins on a frame that is also a hit: it ends the game
-  -- whatever the life count says.
+  -- whatever the life count says. The wave is read last for the mirror of that reason: a
+  -- shell already falling when the last invader died still takes the life it was aimed at,
+  -- and the empty fleet is still empty on the other side of the pause.
   if fleet_landed() then
-    game.state = STATE.GAME_OVER
+    end_game()
   elseif player_hit() then
     kill_player()
+  elseif game.fleet.count == 0 then
+    game.state = STATE.WAVE_CLEAR
+    game.wave_timer = WAVE_CLEAR_FRAMES
   end
 end
 
@@ -865,13 +1024,44 @@ local function state_player_dead()
       game.player.x = PLAYER_START_X
       game.state = STATE.PLAYING
     else
-      game.state = STATE.GAME_OVER
+      end_game()
     end
   end
   draw_player_explosion()
   draw_bunkers()
   draw_fleet()
   draw_ufo()
+  draw_hud()
+end
+
+-- No entity is drawn or updated here, which is also how the saucer is kept off the title
+-- screen: the freeze is the absence of an update call rather than a flag.
+local function state_title()
+  print_centered(GAME_TITLE, TITLE_Y, C_GREEN, BANNER_SCALE)
+  print_centered(score_text("HI ", game.hi), TITLE_HI_Y, C_WHITE, 1)
+  print_centered("PRESS A", TITLE_PROMPT_Y, C_YELLOW, 1)
+  if btnp(BTN_FIRE) then
+    reset_game()
+    game.state = STATE.PLAYING
+  end
+end
+
+-- The field the wave was won on, held still: the shields still eroded, the ship still
+-- where it was standing, and the banner naming the wave that is coming rather than the one
+-- that just ended. reset_wave() restores all of it on the frame the pause runs out, which
+-- is also what keeps a saucer off the transition - it is not drawn here, and the one that
+-- was crossing is gone before the next wave's first frame.
+local function state_wave_clear()
+  draw_player()
+  draw_bunkers()
+  draw_hud()
+  print_centered("WAVE " .. (game.wave + 1), BANNER_Y, C_WHITE, BANNER_SCALE)
+  game.wave_timer = game.wave_timer - 1
+  if game.wave_timer <= 0 then
+    game.wave = game.wave + 1
+    reset_wave()
+    game.state = STATE.PLAYING
+  end
 end
 
 local function state_game_over()
@@ -882,11 +1072,19 @@ local function state_game_over()
   draw_enemy_bullets()
   draw_fleet()
   draw_ufo()
+  draw_hud()
+  print_centered("GAME OVER", BANNER_Y, C_RED, BANNER_SCALE)
+  print_centered("PRESS A", BANNER_PROMPT_Y, C_YELLOW, 1)
+  -- Back to the title rather than straight into a game, so the score stays on screen until
+  -- someone chooses to leave it.
+  if btnp(BTN_FIRE) then game.state = STATE.TITLE end
 end
 
 local STATE_FRAME = {
+  [STATE.TITLE] = state_title,
   [STATE.PLAYING] = state_playing,
   [STATE.PLAYER_DEAD] = state_player_dead,
+  [STATE.WAVE_CLEAR] = state_wave_clear,
   [STATE.GAME_OVER] = state_game_over,
 }
 
@@ -904,6 +1102,6 @@ function BOOT()
   build_fleet()
   build_enemy_bullets()
   build_bunkers()
-  reset_bunkers()
-  reset_ufo()
+  game.hi = pmem(HI_SCORE_SLOT)
+  reset_game()
 end
