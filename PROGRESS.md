@@ -21,24 +21,31 @@ Legend: `TODO` · `IN PROGRESS` · `DONE` (verified in-console) · `BLOCKED`
 | M2 | Fleet — 5 × 11 grid, stepped march, drop-and-reverse, waddle | DONE | Verified 2026-08-17 with `tools/inputsim.py`: 56 steps in 3,100 frames, every one on a multiple of 55, each a 2 px move along the current direction, the waddle toggling on all 56; two drop-and-reverses, at x 72 and x 0, each +6 px in y with no sideways move. Grid observed via `tools/screendump.py` — 55 invaders at x 36..203, y 20..67, three distinct shapes across the five rows — and again at frame 1050, flush right at x 72..239 and one row lower at y 26. 60.00 FPS with the full fleet, moving and firing. Lint pass clean. |
 | M3 | Combat — bullet kills, scoring, speed-up curve | DONE | Verified 2026-08-17 with `tools/inputsim.py`, eleven scenarios: a shot from the start position kills the bottom-row invader on frame 25 — the frame the two boxes first overlap — for 10 points, thinning only row 5 and freeing the bullet at y 67 rather than at the top of the screen; over 4,000 frames of tap-firing, all 25 kills scored exactly their own row's value, all three values (10/20/30) occurred, and the total matched the survivors; sweeping and firing for 8,160 frames killed 53 of 55, and all 820 fleet steps landed exactly where the living count says they should, the interval falling from 53 frames to 2. A fleet emptied on frame 100 held still for the next 300 frames without erroring. Kills observed on screen via `tools/screendump.py` — after 600 frames of held fire, 47 invaders left with gaps in all five rows. 60.00 FPS console / 60.04 host, moving and firing. Lint pass clean; L056 added. |
 | M4 | Threat — enemy fire, death, lives, game over | DONE | Verified 2026-08-17 with `tools/inputsim.py`, five new scenarios: over 2,000 frames the fleet fired 76 shells, every uninterrupted gap exactly 25 frames, never more than 2 in the air at once, each falling 2 px/frame from a muzzle that landed on the grid in all eleven columns and freeing its slot by y 136; after a sweep had emptied the bottom of several columns, all 44 shells of a quiet 1,200-frame window came from the bottom-most living invader of their column, across four different rows; a ship jittering under the fleet was hit at x 115 by a shell at (115, 118), lost a life, held for exactly 90 frames of `PLAYER_DEAD` with the timer 90 down to 1, ignored the left/right it was still being given, saw no shell fired at it while dying, and came back at x 116 — the fleet frozen at (48, 20) throughout; three deaths spent three lives and the third ran into `GAME_OVER` 90 frames later, where the fleet, score and sky all stopped for the remaining 2,112 frames; and a fleet placed one drop above the player's row dropped to y 72 and ended the game on that same frame with all three lives still in hand. Observed on screen via `tools/screendump.py`: a yellow shell 1 × 3 px at (167, 98..100), the red explosion 22 px filling the ship's cell at x 116..123, y 120..127 with no green ship and no shells left in the sky, and a game over after the last life with 55 invaders standing and no ship drawn. 60.00 FPS console / 60.48 host differential, moving and firing. Lint pass clean; L057 and L058 added. |
-| M5 | Bunkers — cell-grid erosion, per-wave reset | TODO | |
+| M5 | Bunkers — cell-grid erosion, per-wave reset | DONE | Verified 2026-08-17 with `tools/inputsim.py`, five new scenarios: four shields of 74 cells stand at x 19/79/139/199, y 100..115, and nothing erodes one nobody shot at; a shot into bunker 2's arch notch stops inside the band, skips the two dead rows below it and blasts the plus around the *lowest* live cell of its column, leaving the other three shields untouched; ten shots into the same spot drilled a channel — 74 → 70 → 66 → 62 cells, each impact 4 px higher than the last, the fourth flying clean through on frame 250 with 62 of 74 cells still standing, which is "blocks bullets while cells remain" and its converse in one run; 2,500 frames of never firing had 32 shells absorbed for 93 cells, every one stopping between y 96 and 106 and every blast centred on the *highest* live cell of its column, the mirror of the player's erosion; and a fleet placed with its bottom row inside the band erased all 90 cells under it and exactly those — 212 left standing outside the footprint, nothing touched beyond it. Observed on screen via `tools/screendump.py`: four 22 px arches with their legs, 1,219 px of color 5 being exactly 35 of ship plus 4 × 74 × 4 of cell; and after 500 frames of sweeping fire, bunker 3 chewed to fragments and bunker 4's roof bitten open. 60.00 FPS console / 60.47 host differential with 296 cells drawn a frame, moving and firing. All 17 M1–M4 scenarios re-run and passing, and the full 22 ran clean three times end to end — 101 assertions, 0 failures — after two pre-existing RNG-deadline flakes were found and fixed (§3). Lint pass clean; L059 and L060 added. |
 | M6 | Mystery ship — spawn timing, traversal, bonus | TODO | |
 | M7 | Shell — title, game over, wave transitions, HUD, `pmem`, extra life | TODO | |
 | M8 | Audio and polish — SFX, fleet loop, explosions, perf pass | TODO | |
 
-**Current position:** M4 complete and verified in-console. The game is losable in both ways
-`MISSION.md` §3 names, and `TIC()` now dispatches through `STATE_FRAME` over three real
-states, so `game.state` has stopped being decorative. Nothing is blocked; M5 (four
-cell-grid bunkers, eroded from both directions, reset per wave) is next.
+**Current position:** M5 complete and verified in-console. Four cell-grid shields stand
+between the fleet and the player, eroded from below by the ship, from above by the fleet,
+and erased outright by an invader standing in one. Nothing is blocked; M6 (the mystery
+ship — spawn timing, traversal, bonus scoring) is next.
 
-Three things M5 inherits. Bunkers sit between two bullet paths that both already exist and
-both already resolve their own collisions — `collide_bullet_fleet()` and `player_hit()` —
-so the erosion check is a third box test on the same frame, not a new system. The harness
-now knows about states: a scenario says which state it is measuring in (L057) and may not
-lean on the random stream (L058), both of which M5's scenarios inherit for free. And the
-ship at x 116 sits under fleet column 6 and is shot at within 50 frames, so any new
-scenario about the *player* runs against an emptied fleet (`clear_at=1`) rather than trying
-to walk out of range — 116 frames at 1 px a frame is far too slow to escape.
+Two halves of M5, and only one of them is closed. The erosion is done and tested from every
+direction `MISSION.md` §3 names. The **per-wave reset is built but undriven**: the shields
+are rebuilt by `reset_bunkers()`, which is split from `build_bunkers()` precisely so a wave
+can refill the grid without allocating mid-frame (L009), but `WAVE_CLEAR` does not exist
+until M7 and `reset_bunkers()` is a `local` the probe cannot reach without instrumenting
+the cart (L053). It is carried as an open question below rather than counted as tested.
+
+Three things M6 inherits. The `_ENV` global list has now been unchanged for four milestones
+running, which is the mechanical check that no undocumented API call has crept in — M6's UFO
+is the first thing since M1 likely to need a new one, so run L011 early rather than at the
+close. Every scenario that fires now asserts the geometry it is aiming through (L059), so a
+mystery ship crossing the UFO lane will not silently re-aim an existing scenario the way the
+shields nearly did. And `cleared_the_wave()` exists because M5 made the sweeping ship
+survive twice as long: any long scenario M6 adds should expect a wave that now sometimes
+ends itself.
 
 ---
 
@@ -116,6 +123,71 @@ luac5.4 -p game.lua
 
 Newest first. Record the *why*, not just the *what*.
 
+- **2026-08-17 — Two M4 scenarios were flaky against the random stream and had been since
+  M4; both windows lengthened.** Found by running the suite repeatedly during M5, not caused
+  by it — the ship's box at x 115..123 lies wholly inside the 101..138 gap and is shielded
+  by nothing at any x, and the shields touch neither the fire cadence nor the column choice.
+  `scenario_player_death` went 900 → 1800 frames: the fleet fires every 25 frames at one of
+  eleven columns and only a shell over the ship's 8 px box can land, so 900 frames is ~36
+  shells and `(10/11)^36` ≈ 3% of runs never got hit, failing on `standing under the fleet
+  gets the ship killed` — which reads exactly like M4's death handling breaking. Its
+  docstring's claim that the ship was "certain to be shot" was simply false.
+  `scenario_out_of_lives` went 4000 → 6000 for the same reason one level up: it needs three
+  deaths *plus* the 90-frame pause after the third, and observed third deaths range from
+  frame 1377 to 3912 — at 4000 the run counted all three deaths correctly and then failed on
+  `the game never ended`, two frames short. Both are windowed on events read out of the
+  trace, so only the wall clock changed. This is L058's cost in a form the rule does not
+  name: not a scenario that *depends* on the stream, but one that gives it a deadline. Worth
+  stating plainly — the suite had two scenarios that failed for their own reasons, and it
+  took running it more than once to see either.
+- **2026-08-17 — The shields cost the ship nothing and bought it twice the lifespan, which
+  broke a scenario by making the game go too well.** `scenario_speed_up` sweeps and fires
+  for 8,160 frames; with bunkers absorbing shells it now dies 5–7 times instead of 12, so it
+  kills 49–53 of the fleet instead of 37–45, and a fleet down to its last invaders steps
+  every 2 frames and walks itself onto the player's row. The run therefore reaches a game
+  over in roughly half of all runs — measured at frames 7573, 7784, 7870 and not at all —
+  which `outlived_the_threat()` correctly called a blind tail. Confirmed against a
+  worktree at M4's commit, where three runs gave 37/45/38 kills and no game over, so this
+  is the shields' doing rather than the clock-seeded stream. Rather than shorten the sweep,
+  which would have cost the bottom of the curve the scenario exists to measure, the
+  scenario closes with a new `cleared_the_wave()`: a game over is accepted only when it *is*
+  a landing and the fleet is down to under a quarter. The assertion got stronger, not
+  weaker — it now says why the run ended.
+- **2026-08-17 — Bunker cells are read before the fleet, and drawn one `rect` each.**
+  Order first: once the fleet descends into the band an invader and a live cell can share a
+  pixel, but `crush_bunkers()` runs in the update half of the frame, so any cell inside a
+  living invader is already gone by the time the bullet is tested — the shield-first test
+  can never steal a kill. Drawing second: 296 `rect` calls a frame is the direct reading of
+  `MISSION.md` §3's "draw from that table", and run-length merging the intact shape would
+  cut that to 40. It was not needed. Measured at 60.00 FPS console / 60.47 host with the
+  full fleet and all four shields up, moving and firing — the same differential M4 recorded
+  without them. The merge stays unbuilt rather than sitting in the file unjustified.
+- **2026-08-17 — `reset_bunkers()` is split from `build_bunkers()` a milestone before
+  anything calls it twice.** This is the shape `LINT-RULES.md` L015 forbids — one caller,
+  no second in sight — and it survives on a hard constraint rather than on speculation:
+  L009 bans a table constructor in the frame path, and `MISSION.md` §3's per-wave reset has
+  to run from inside `WAVE_CLEAR`. Allocating in `build_bunkers()` (BOOT only) and filling
+  in `reset_bunkers()` is the only split that lets M7 call it without allocating. Logged
+  here so a later reviewer does not merge them back on L015 grounds. User's call, taken
+  before the work started, against the alternative of one function M7 would have to split.
+- **2026-08-17 — The blast is a plus, and it drills rather than shaves.** Measured before
+  any Lua was written: clearing rows `r-1, r, r+1` in the impact column takes 6 px of depth
+  per hit, so a ship parked in one spot tunnels through a 16 px shield in four shots and
+  leaves 62 of 74 cells standing around the channel. The first estimate offered — "~15
+  hits" — was the count to clear *all* the cells and badly overstated the shield's
+  durability at any one spot; the correction was put to the user with a flat 3-wide blast
+  (~8 shots to tunnel) as the alternative. Kept as the plus: the arcade's shields drilled
+  the same way, and a narrow channel is a more interesting thing to shoot through than an
+  evenly dissolving wall.
+- **2026-08-17 — Bunkers at y 100, 11 × 8 cells of 2 px, at x 19/79/139/199.**
+  `MISSION.md` §2 puts them at ~106 and calls its coordinates targets to tune. 100 is as
+  close to that as leaves clear sky above the ship at 120, and it is what makes the crush
+  reachable in real play: the fleet's bottom row overlaps the band from `fleet.y` 56 and the
+  game ends at 74, so four drops happen inside it. y 104 would have matched the spec more
+  closely and left one. Pitch is `SCREEN_W / 4` with the shape centred in it, which puts 19
+  px of margin at both edges and — the load-bearing accident — leaves the ship's start
+  muzzle at x 119 inside a 38 px gap, so every M1–M4 scenario that fires still reaches the
+  fleet. That is now asserted rather than relied on (L059).
 - **2026-08-17 — `ENEMY_FIRE_FRAMES` is 25, not 45, so that the 3-shell cap can bind.**
   User's call, taken before the work started, on a measurement: a bottom-row shell spawns
   at y 68 and despawns at y 136, which is 34 frames of flight, so at a 45-frame cooldown
@@ -422,6 +494,13 @@ recorded in `docs/tic80-api.md` **before its first use**.
   call is `math.random`, which lives under `math` and belongs in `docs/lua-notes.md` — it
   is recorded there, including a `DISCREPANCY:` correcting this session's own first
   answer about seeding (§3).
+- M5 added no TIC-80 call either, 2026-08-17, checked the same mechanical way: the L011
+  `_ENV` list is unchanged for the fourth milestone running — `BOOT`, `TIC`, `btn`, `btnp`,
+  `cls`, `game`, `ipairs`, `math`, `poke4`, `rect`, `spr`. The shields are `rect`, whose
+  signature has been recorded since M1 and which has no optional arguments to get wrong
+  (L007); `MISSION.md` §3's ban on faking destruction with sprite swaps is therefore
+  satisfied structurally rather than by discipline. `BUNKER_SHAPE` is read with the same
+  `s:sub()` method form `blit_sprite_sheet()` already uses, which never reaches `_ENV`.
 - The `btnp` entry carries a `DISCREPANCY:` marker per `AGENTS.md` §4.3 — not between
   the docs and the console, but between the console and RAM: `btnp` ignores writes to
   the GAMEPADS region. It is the reason `tools/inputsim.py` supplies its own.
@@ -430,7 +509,7 @@ recorded in `docs/tic80-api.md` **before its first use**.
 
 ## 5. Known bugs
 
-None reproducible as of 2026-08-17. All seventeen M1–M4 scenarios in `tools/inputsim.py`
+None reproducible as of 2026-08-17. All twenty-two M1–M5 scenarios in `tools/inputsim.py`
 pass, and every framebuffer dump matches its milestone's acceptance criteria.
 
 M3's note here — that the fleet could march off the bottom of the screen because nothing
@@ -448,6 +527,23 @@ Per `AGENTS.md` §4.5: state the question, implement around it under a clearly s
 assumption, and record the assumption here. Mark answered ones `RESOLVED:` with the
 answer and its source; do not delete them.
 
+- **OPEN: Do the bunkers actually reset at the start of each wave?** `MISSION.md` §3 says
+  they do, and M5 **cannot test it**: there is no wave transition until M7's `WAVE_CLEAR`,
+  and `reset_bunkers()` is a `local` that `tools/inputsim.py` cannot reach without putting a
+  hook in the cart, which `LINT-RULES.md` L053 forbids. Assumed correct on inspection — it
+  is the same loop that fills the grid at boot, and the boot fill *is* verified, all 296
+  cells against `BUNKER_SHAPE`. What is untested is only that something calls it at the
+  right moment, and in M5 nothing calls it at all beyond `BOOT()`. Closes with M7's wave
+  transition, which should assert the shields come back full after a wave that eroded them.
+- **OPEN: Is a 74-cell shield that a parked ship drills through in four shots the right
+  durability?** Measured rather than felt (§3). Four shots to open a channel is the arcade's
+  own behaviour and is deliberate, but whether a shield that yields that fast still reads as
+  *cover* during play is a question only playing settles — and the same four shots let the
+  fleet's shells through in the other direction, which is the half that decides whether
+  hiding behind one is a strategy or a trap. The tunables are one line each: `BUNKER_BLAST`
+  (a flat 3-wide blast roughly doubles the shots to tunnel) and `BUNKER_ROWS`. Related to
+  the pressure question below — they trade against each other, and neither should be tuned
+  without the other in view.
 - **OPEN: Is a shell every 25 frames the right amount of pressure, and 90 frames the
   right death pause?** Both are reasoned rather than played. 25 is the number at which
   `MISSION.md` §3's cap of three concurrent shells stops being dead code (§3 above), not a

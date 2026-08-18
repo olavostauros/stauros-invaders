@@ -68,6 +68,23 @@ local function enemy_bullets()
   return out
 end
 
+-- One 11-bit mask per bunker row, bunker-major. A live-cell count would answer "how much
+-- is left" but not "which side did it go from", and erosion direction is half of what M5
+-- has to show.
+local function bunker_masks()
+  local out = ""
+  for _, bunker in ipairs(game.bunkers) do
+    for row = 1, #bunker.cells do
+      local mask = 0
+      for col, alive in ipairs(bunker.cells[row]) do
+        if alive then mask = mask | (1 << (col - 1)) end
+      end
+      out = out .. " " .. mask
+    end
+  end
+  return out
+end
+
 local function mask_at(f)
   local last = 0
   for _, segment in ipairs(PROBE_SCRIPT) do
@@ -106,5 +123,5 @@ function TIC()
         game.fleet.x .. " " .. game.fleet.y .. " " .. game.fleet.dir .. " " ..
         game.fleet.frame .. " " .. game.score .. row_masks() .. " " ..
         game.state .. " " .. game.lives .. " " .. game.death_timer ..
-        enemy_bullets() .. "]", 12)
+        enemy_bullets() .. bunker_masks() .. "]", 12)
 end

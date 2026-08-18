@@ -51,6 +51,16 @@ FLEET_STEP_FRAMES_MAX, FLEET_STEP_FRAMES_MIN = 55, 2
 FLEET_ROW_POINTS = [30, 20, 20, 10, 10]
 FLEET_LANDING_Y = PLAYER_Y - SPRITE_H
 
+BUNKER_COUNT, BUNKER_COLS, BUNKER_ROWS, BUNKER_CELL = 4, 11, 8, 2
+BUNKER_W, BUNKER_H = BUNKER_COLS * BUNKER_CELL, BUNKER_ROWS * BUNKER_CELL
+BUNKER_PITCH = SCREEN_W // BUNKER_COUNT
+BUNKER_MARGIN = (BUNKER_PITCH - BUNKER_W) // 2
+BUNKER_Y = 100
+BUNKER_X = [BUNKER_MARGIN + i * BUNKER_PITCH for i in range(BUNKER_COUNT)]
+BUNKER_SHAPE = ("..#######..", ".#########.", "###########", "###########",
+                "###########", "###########", "####...####", "###.....###")
+BUNKER_FULL = sum(row.count("#") for row in BUNKER_SHAPE)
+
 # game.lua's per-frame trace, in order, each field beside the pattern that matches it.
 # One list rather than a name tuple next to a regex literal: the two could drift, and when
 # M4 added fields to the probe they did - the regex still ended at r5 and every scenario
@@ -63,7 +73,9 @@ TRACE = (
     + tuple((f"r{row}", NUM) for row in range(1, FLEET_ROWS + 1))
     + (("state", WORD), ("lives", NUM), ("dtimer", NUM))
     + tuple(field for slot in range(1, ENEMY_BULLET_MAX + 1)
-            for field in ((f"e{slot}", FLAG), (f"e{slot}x", NUM), (f"e{slot}y", NUM))))
+            for field in ((f"e{slot}", FLAG), (f"e{slot}x", NUM), (f"e{slot}y", NUM)))
+    + tuple((f"b{b}r{row}", NUM) for b in range(1, BUNKER_COUNT + 1)
+            for row in range(1, BUNKER_ROWS + 1)))
 
 FIELDS = tuple(name for name, _ in TRACE)
 FRAME_RE = re.compile(r"\[" + " ".join(f"({pat})" for _, pat in TRACE) + r"\]")
@@ -101,6 +113,82 @@ def step_frames(alive):
 
 def living(frame):
     return sum(popcount(frame[r]) for r in ROWS)
+
+
+def bunker_cells(frame, bunker):
+    """The (col, row) cells still standing in `bunker`, 1-based, read off its row masks."""
+    return {(col, row)
+            for row in range(1, BUNKER_ROWS + 1)
+            for col in range(1, BUNKER_COLS + 1)
+            if frame[f"b{bunker}r{row}"] & (1 << (col - 1))}
+
+
+def bunker_live(frame, bunker=None):
+    """Cells left in one bunker, or across all four."""
+    which = (bunker,) if bunker else range(1, BUNKER_COUNT + 1)
+    return sum(len(bunker_cells(frame, b)) for b in which)
+
+
+def cell_box(bunker, col, row):
+    """The screen box of one cell: (x, y, x_end, y_end), ends exclusive."""
+    x = BUNKER_X[bunker - 1] + (col - 1) * BUNKER_CELL
+    y = BUNKER_Y + (row - 1) * BUNKER_CELL
+    return x, y, x + BUNKER_CELL, y + BUNKER_CELL
+
+
+def bunker_at(x, width=1):
+    """Which bunker a box of `width` px starting at `x` overlaps, or None. The gaps are
+    wide enough that a bullet cannot straddle two."""
+    for b, bx in enumerate(BUNKER_X, start=1):
+        if x < bx + BUNKER_W and x + width > bx:
+            return b
+    return None
+
+
+def expected_blast(live, col, row):
+    """game.lua's erode_bunker(), mirrored: the plus around (col, row), clipped to the grid
+    and intersected with what was still standing."""
+    return {(col + dc, row + dr) for dc, dr in ((0, 0), (-1, 0), (1, 0), (0, -1), (0, 1))
+            if 1 <= col + dc <= BUNKER_COLS and 1 <= row + dr <= BUNKER_ROWS} & live
+
+
+def facing_cell(live, cols, from_below):
+    """The cell a shot arriving over `cols` meets first - lowest row when it is rising,
+    highest when it is falling. This is the rule game.lua's bunker_cell() implements, and
+    asserting against it is what makes 'erodes from the right side' testable."""
+    facing = [(row, col) for col, row in live if col in cols]
+    if not facing:
+        return None
+    row, col = (max if from_below else min)(facing)
+    return col, row
+
+
+def fires_through_a_gap(name, x):
+    """LINT-RULES.md L059: a scenario that shoots into what it believes is empty sky says
+    so, against the current geometry. Every M1-M4 scenario that fires does it from x 119 or
+    x 3, both of which fall between shields - by luck, not by design - and a shot the
+    shields ate would surface as `len(fired) == 6`, reading as the single-bullet rule
+    breaking rather than as the aim being wrong."""
+    hit = bunker_at(x)
+    return check(f"{name} fires into open sky", hit is None,
+                 f"muzzle x {x} falls in a gap, shields at {BUNKER_X}" if hit is None else
+                 f"muzzle x {x} is under bunker {hit}, which spans "
+                 f"{BUNKER_X[hit - 1]}..{BUNKER_X[hit - 1] + BUNKER_W - 1}")
+
+
+def erosions(frames):
+    """(frame, bunker, cells that went) for every frame on which a bunker lost cells. A
+    cell that comes back is an error, not a finding - nothing restores a shield mid-wave,
+    and a per-bunker count could not have seen it."""
+    out = []
+    for prev, fr in zip(frames, frames[1:]):
+        for b in range(1, BUNKER_COUNT + 1):
+            before, after = bunker_cells(prev, b), bunker_cells(fr, b)
+            if after - before:
+                sys.exit(f"bunker {b} regrew {sorted(after - before)} on frame {fr['f']}")
+            if before - after:
+                out.append((fr, b, before - after))
+    return out
 
 
 def kills(frames):
@@ -259,6 +347,43 @@ def stayed_playing(frames):
                  f"for {len(dead)} of {len(frames)} frames")
 
 
+def fleet_has_landed(frame):
+    """Whether the fleet's lowest *living* row has reached the player's row, read off the
+    row masks rather than off row 5, which may have been shot away."""
+    rows = [row for row in range(1, FLEET_ROWS + 1) if frame[ROWS[row - 1]]]
+    return bool(rows) and frame["fy"] + (max(rows) - 1) * FLEET_ROW_SPACING >= FLEET_LANDING_Y
+
+
+def cleared_the_wave(frames):
+    """The third closing assertion, and the only place a game over is not a failure.
+
+    Since M5 the shields keep the sweeping ship alive roughly twice as long - measured at
+    5-7 deaths where M4 saw 12 - so it kills 49-53 of the fleet instead of 37-45, and a
+    fleet down to its last invaders steps every 2 frames and walks itself onto the player's
+    row. The run therefore now sometimes plays the wave to its natural end. That is the
+    curve doing exactly what the scenario claims, so requiring outlived_the_threat() here
+    would be asserting the ship is bad at its job.
+
+    What is still a failure: a game over that is not a landing, or one that arrives while
+    the fleet is still thick - either means the run went blind long before it ended."""
+    over = [fr for fr in frames if fr["state"] == "GAME_OVER"]
+    died = sum(1 for prev, fr in zip(frames, frames[1:])
+               if fr["state"] == "PLAYER_DEAD" and prev["state"] != "PLAYER_DEAD")
+    if not over:
+        return check("the run played a live game to the end", True,
+                     f"{died} death(s) survived over {len(frames)} frames, "
+                     f"{living(frames[-1])} invaders still up")
+    first = over[0]
+    spent = living(first) < FLEET_COUNT // 4
+    return check("the run ended by clearing the wave, not by going blind",
+                 fleet_has_landed(first) and spent,
+                 f"game over on frame {first['f']} of {len(frames)}, the fleet landing at "
+                 f"y {first['fy']} with {living(first)} of {FLEET_COUNT} left"
+                 if fleet_has_landed(first) and spent else
+                 f"game over on frame {first['f']} with {living(first)} invaders up and "
+                 f"the fleet at y {first['fy']}, which is no landing")
+
+
 def outlived_the_threat(frames):
     """The weaker companion to stayed_playing(), for the long runs that keep their lives
     topped up: dying is expected and simulated through, reaching a game over is not - past
@@ -315,6 +440,7 @@ def scenario_hold_fire():
                 f"idle for the remaining {frames[-1]['f'] - flight[-1]['f']} frames")
     ok &= check("bullet leaves the muzzle", fired[0]["bx"] == X_MIN + MUZZLE_X,
                 f"bullet x {fired[0]['bx']}, ship x {fired[0]['x']}")
+    ok &= fires_through_a_gap("the parked ship", X_MIN + MUZZLE_X)
     ok &= stayed_playing(frames)
     return ok
 
@@ -346,6 +472,11 @@ def scenario_tap_while_in_flight():
     print("\ntap fire 6 times, 10 frames apart, while a bullet is still in flight")
     ok = check("presses during flight are ignored", len(fired) == 1,
                f"{len(fired)} bullet(s) from 6 presses")
+    # The most fragile aim in the suite: six taps span exactly 60 frames against a 59-frame
+    # flight, so a shield that ate the bullet would free the slot and let a later tap fire
+    # legitimately - six bullets, reported as the single-bullet rule breaking. x 0's muzzle
+    # clears bunker 1 by 16 px, which is luck until it is asserted.
+    ok &= fires_through_a_gap("the parked ship", X_MIN + MUZZLE_X)
     ok &= stayed_playing(frames)
     return ok
 
@@ -467,6 +598,7 @@ def scenario_kill_bottom_row():
                 and frames[hit - 1]["by"] > 0,
                 f"bullet cleared on frame {dead['f']} at y {frames[hit - 1]['by']}, "
                 f"idle for the remaining {len(frames) - hit} frames")
+    ok &= fires_through_a_gap("the ship at its start position", START_X + MUZZLE_X)
     ok &= stayed_playing(frames)
     return ok
 
@@ -492,6 +624,7 @@ def scenario_score_by_row():
     expected = sum((FLEET_COLS - n) * FLEET_ROW_POINTS[i] for i, n in enumerate(left))
     ok &= check("the total is the sum of what died", last["score"] == expected,
                 f"score {last['score']}, rows left {left} = {expected} points of kills")
+    ok &= fires_through_a_gap("the ship at its start position", START_X + MUZZLE_X)
     ok &= outlived_the_threat(frames)
     return ok
 
@@ -500,7 +633,12 @@ def scenario_speed_up():
     """MISSION.md's difficulty curve: the step interval must follow the living count.
     Firing while sweeping spreads the shots across every column, which is what makes the
     count fall far enough for the curve to have a shape worth checking. A stationary ship
-    empties one column and then misses until the fleet drifts."""
+    empties one column and then misses until the fleet drifts.
+
+    Closes with cleared_the_wave() rather than outlived_the_threat(): since M5 the shields
+    keep the ship alive long enough that this run sometimes finishes the wave outright, and
+    a landing at the end of a nearly-cleared fleet is the curve working, not a blind run.
+    """
     script = []
     for i in range(34):
         mask = RIGHT if i % 2 == 0 else LEFT
@@ -532,7 +670,7 @@ def scenario_speed_up():
                 f"{gaps[0][0]} frames a step at {gaps[0][1]} alive, "
                 f"{gaps[-1][0]} at {gaps[-1][1]}; "
                 f"{FLEET_COUNT - living(frames[-1])} invaders killed")
-    ok &= outlived_the_threat(frames)
+    ok &= cleared_the_wave(frames)
     return ok
 
 
@@ -681,9 +819,16 @@ def scenario_bottom_most_fires():
     fired = [(fr, slot) for fr, slot in enemy_shots(frames) if fr["f"] >= quiet[0]["f"]]
     print(f"\ncarve holes for {sum(n for n, _ in carve)} frames, then watch {watch} more")
 
-    ok = check("the sweep emptied the bottom of some columns",
-               living(quiet[-1]) < FLEET_COUNT,
-               f"{FLEET_COUNT - living(quiet[-1])} invaders killed, rows left "
+    # The precondition the conclusion actually needs, not merely "something died": without
+    # columns whose bottom row is gone, the bottom-most rule below is satisfied by any fleet
+    # that always fires from row 5. Since M5 the shields eat a share of the carve, so a thin
+    # carve now fails downstream as "the fleet is not firing from the bottom-most invader",
+    # which is the M4 rule being blamed for an M5 change.
+    carved = [col for col in range(1, FLEET_COLS + 1)
+              if (bottom_row(quiet[-1], col) or FLEET_ROWS) < FLEET_ROWS]
+    ok = check("the sweep emptied the bottom of at least two columns", len(carved) >= 2,
+               f"{FLEET_COUNT - living(quiet[-1])} invaders killed; columns {carved} have "
+               f"lost their bottom row, rows left "
                f"{[row_count(quiet[-1], row) for row in range(1, FLEET_ROWS + 1)]}")
     ok &= check("nothing died while the shells were being watched",
                all(living(fr) == living(quiet[0]) for fr in quiet),
@@ -710,15 +855,23 @@ def scenario_bottom_most_fires():
 
 def scenario_player_death():
     """Left and right on alternating frames: the ship jitters between x 115 and 116 and
-    stays under the fleet's guns, so it is certain to be shot, and the input it is given
+    stays under the fleet's guns, so it is shot sooner or later, and the input it is given
     is visible in its position every frame it is alive. While it is dying that jitter has
     to stop dead - which is the check, in one run.
 
     One run because the fleet's aim cannot be predicted: the console seeds math.random from
     the clock, so the frame the ship dies on is different every time (docs/lua-notes.md).
     Everything here is read out of the trace rather than scripted against.
+
+    'Sooner or later' is the whole reason this window is 1800 frames rather than 900. The
+    fleet fires every 25 frames at a column it picks at random from eleven, and only a
+    shell over x 115..123 can land on the ship, so at 900 frames roughly one run in thirty
+    never got hit at all and failed on its own premise - observed 2026-08-17, and nothing to
+    do with the shields, which do not cover the ship's box at any x. Doubling the window
+    puts that under a thousandth. Every assertion below is windowed on the *first* death, so
+    the extra frames cost nothing but wall clock.
     """
-    total = 900
+    total = 1800
     frames = run([(1, LEFT), (1, RIGHT)] * (total // 2))
     died = [fr for prev, fr in zip(frames, frames[1:])
             if fr["state"] == "PLAYER_DEAD" and prev["state"] == "PLAYING"]
@@ -787,8 +940,14 @@ def scenario_player_death():
 
 
 def scenario_out_of_lives():
-    """MISSION.md's first way to lose. No lives topping: the run is meant to end."""
-    total = 4000
+    """MISSION.md's first way to lose. No lives topping: the run is meant to end.
+
+    6000 frames for the same reason scenario_player_death takes 1800 - three deaths at a
+    random column every 25 frames is a long tail, and the third one has to land a further 90
+    frames before the run stops or the game over falls outside the window. Observed third
+    deaths range from frame 1377 to 3912, and at 4000 that last one failed as `the game
+    never ended` with all three deaths correctly counted on the line above."""
+    total = 6000
     frames = run([(total, IDLE)])
     deaths = [fr for prev, fr in zip(frames, frames[1:])
               if fr["state"] == "PLAYER_DEAD" and prev["state"] == "PLAYING"]
@@ -874,6 +1033,241 @@ def scenario_fleet_landing():
     return ok
 
 
+# The ship walks here to stand under bunker 2, whose x range is 79..100: the muzzle lands
+# at x 89, in the arch notch, so the first shot has to fall through two dead rows before it
+# finds anything. A solid column would be hit on the frame it was fired and never traced.
+NOTCH_X = BUNKER_X[1] + 5 * BUNKER_CELL - MUZZLE_X
+NOTCH_COL = 6
+
+
+def bullet_impacts(frames):
+    """(frame, bunker, cells cleared, the bullet's last live position) for every player
+    bullet that died against a shield."""
+    out = []
+    for fr, bunker, gone in erosions(frames):
+        prev = frames[fr["f"] - 2]
+        if prev["live"] and not fr["live"]:
+            out.append((fr, bunker, gone, (prev["bx"], prev["by"])))
+    return out
+
+
+def scenario_bunkers_intact():
+    """The shields exist, all four of them, before anything has touched one. Emptied fleet
+    so the run is quiet and nothing can erode a bunker while it is being counted."""
+    frames = run([(60, IDLE)], clear_at=1)
+    print("\ncount the shields over 60 quiet frames")
+    full = {(col, row)
+            for row in range(1, BUNKER_ROWS + 1)
+            for col in range(1, BUNKER_COLS + 1)
+            if BUNKER_SHAPE[row - 1][col - 1] == "#"}
+
+    wrong = [b for b in range(1, BUNKER_COUNT + 1)
+             if bunker_cells(frames[-1], b) != full]
+    ok = check(f"{BUNKER_COUNT} shields, every cell of the shape standing", not wrong,
+               f"{BUNKER_COUNT} bunkers of {BUNKER_FULL} cells at x {BUNKER_X}, "
+               f"y {BUNKER_Y}..{BUNKER_Y + BUNKER_H - 1}"
+               if not wrong else f"bunker(s) {wrong} do not match BUNKER_SHAPE")
+    ok &= check("nothing erodes a shield nobody shot at", not erosions(frames),
+                f"all {BUNKER_FULL * BUNKER_COUNT} cells held for {len(frames)} frames")
+    ok &= stayed_playing(frames)
+    return ok
+
+
+def scenario_bunker_blocks_bullet():
+    """MISSION.md's 'blocks bullets while cells remain', and the direction the erosion runs
+    in. Emptied fleet, so the only thing the bullet can meet is the shield and the only
+    thing that can erode one is the ship."""
+    walk = START_X - NOTCH_X
+    frames = run([(walk, LEFT), (1, FIRE), (90, IDLE)], clear_at=1)
+    print(f"\npark the muzzle at x {NOTCH_X + MUZZLE_X} under bunker 2, then fire once")
+
+    ok = check("the ship is standing under a shield",
+               bunker_at(frames[walk - 1]["x"] + MUZZLE_X) == 2,
+               f"ship x {frames[walk - 1]['x']}, muzzle x {frames[walk - 1]['x'] + MUZZLE_X}"
+               f", bunker 2 spans x {BUNKER_X[1]}..{BUNKER_X[1] + BUNKER_W - 1}")
+
+    above = [fr for fr in frames if fr["live"] and fr["by"] + BULLET_H <= BUNKER_Y]
+    ok &= check("no bullet gets past the shield", not above,
+                f"the bullet never rose above y {BUNKER_Y}" if not above else
+                f"bullet reached y {min(fr['by'] for fr in above)}, clear of the band")
+
+    impacts = bullet_impacts(frames)
+    ok &= check("the shot stops in the shield and takes cells with it", len(impacts) == 1,
+                f"{len(impacts)} impact(s); "
+                + (f"bunker {impacts[0][1]}, {len(impacts[0][2])} cells at "
+                   f"{sorted(impacts[0][2])}, bullet last at {impacts[0][3]}"
+                   if impacts else "the bullet died without eroding anything"))
+    if len(impacts) != 1:
+        return False
+
+    fr, bunker, gone, (bx, by) = impacts[0]
+    before = bunker_cells(frames[fr["f"] - 2], bunker)
+    centre = facing_cell(before, {NOTCH_COL}, from_below=True)
+    ok &= check("it erodes the shield from underneath",
+                centre is not None and gone == expected_blast(before, *centre),
+                f"blast centred on the lowest live cell of column {NOTCH_COL}, row "
+                f"{centre[1]} - two dead rows of the arch skipped" if centre and
+                gone == expected_blast(before, *centre) else
+                f"cleared {sorted(gone)}, expected {sorted(expected_blast(before, *centre))}"
+                if centre else "no live cell in the bullet's column")
+    ok &= check("only the shield it hit loses cells",
+                all(bunker_live(fr, b) == BUNKER_FULL
+                    for b in range(1, BUNKER_COUNT + 1) if b != bunker),
+                f"the other three shields still hold {BUNKER_FULL} cells each")
+    ok &= stayed_playing(frames)
+    return ok
+
+
+def scenario_bunker_erodes_progressively():
+    """MISSION.md's 'erode progressively', and the far side of 'while cells remain': shots
+    into one spot drill a channel, each one biting deeper than the last, until the column
+    is gone and the next shot flies through untouched."""
+    walk = START_X - NOTCH_X
+    # 69 idle frames a shot: once the channel is open a bullet needs ~60 frames to leave
+    # the screen, and fire() refuses while one is still in flight.
+    frames = run([(walk, LEFT)] + [(1, FIRE), (69, IDLE)] * 10, clear_at=1)
+    print(f"\ndrill ten shots into bunker 2 at x {NOTCH_X + MUZZLE_X}")
+
+    impacts = bullet_impacts(frames)
+    ok = check("the shield takes several hits before it is holed", len(impacts) >= 3,
+               f"{len(impacts)} shots stopped by the shield")
+    if len(impacts) < 3:
+        return False
+
+    counts = [bunker_live(fr, 2) for fr, _, _, _ in impacts]
+    ok &= check("every hit costs cells, and none ever come back",
+                all(b < a for a, b in zip([BUNKER_FULL] + counts, counts)),
+                f"cells left after each hit: {counts}, from {BUNKER_FULL}")
+
+    depths = [pos[1] for _, _, _, pos in impacts]
+    ok &= check("each shot bites deeper than the last",
+                all(b < a for a, b in zip(depths, depths[1:])),
+                f"impact heights {depths}, rising through the shield")
+
+    through = [fr for fr in frames if fr["live"] and fr["by"] + BULLET_H <= BUNKER_Y]
+    ok &= check("once the column is gone a shot passes clean through", bool(through),
+                f"a bullet cleared the band on frame {through[0]['f']}, after "
+                f"{len(impacts)} hits had opened the channel" if through else
+                f"nothing got through in {len(frames)} frames")
+    ok &= check("the shield is holed, not flattened",
+                bunker_live(frames[-1], 2) > BUNKER_FULL // 2,
+                f"{bunker_live(frames[-1], 2)} of {BUNKER_FULL} cells still standing "
+                f"around the channel")
+    ok &= stayed_playing(frames)
+    return ok
+
+
+def scenario_shell_erodes_bunker():
+    """The other direction: MISSION.md has both bullets erode the shields, and an enemy
+    shell has to eat into the roof rather than the underside.
+
+    The ship never fires, so every cell lost in this run was taken by a shell and the
+    erosion centres can be checked against the top-most survivor of each shell's column.
+    Lives are held: the run is about the shields, not about dodging."""
+    total = 2500
+    frames = run([(total, LEFT)], lives=PLAYER_LIVES)
+    print(f"\nnever fire, and watch the fleet shell the shields for {total} frames")
+
+    shell_hits = []
+    for fr, bunker, gone in erosions(frames):
+        prev = frames[fr["f"] - 2]
+        for slot in SLOTS:
+            if prev[slot] and not fr[slot] and bunker_at(prev[slot + "x"]) == bunker:
+                shell_hits.append((fr, bunker, gone, prev[slot + "x"], prev[slot + "y"]))
+                break
+
+    ok = check("shells eat into the shields", len(shell_hits) > BUNKER_COUNT,
+               f"{len(shell_hits)} shells absorbed, "
+               f"{BUNKER_FULL * BUNKER_COUNT - bunker_live(frames[-1])} cells lost")
+    if not shell_hits:
+        return False
+
+    ok &= check("no shell erodes a shield from below",
+                all(y < BUNKER_Y + BUNKER_H for _, _, _, _, y in shell_hits),
+                f"every absorbed shell stopped between y {min(y for *_, y in shell_hits)} "
+                f"and {max(y for *_, y in shell_hits)}, inside the band "
+                f"{BUNKER_Y}..{BUNKER_Y + BUNKER_H - 1}")
+
+    wrong = []
+    for fr, bunker, gone, sx, _ in shell_hits:
+        before = bunker_cells(frames[fr["f"] - 2], bunker)
+        cols = {col for col in range(1, BUNKER_COLS + 1)
+                if sx < cell_box(bunker, col, 1)[2] and sx + 1 > cell_box(bunker, col, 1)[0]}
+        centre = facing_cell(before, cols, from_below=False)
+        if centre is None or gone != expected_blast(before, *centre):
+            wrong.append((fr["f"], bunker, sorted(gone), centre))
+    ok &= check("every shell erodes the shield from the top down", not wrong,
+                f"all {len(shell_hits)} blasts centred on the highest live cell of the "
+                f"shell's column" if not wrong else
+                f"{len(wrong)} wrong, first (frame, bunker, cleared, expected centre) "
+                f"{wrong[0]}")
+    ok &= outlived_the_threat(frames)
+    return ok
+
+
+def scenario_fleet_crushes_bunkers():
+    """MISSION.md's 'invaders passing through a bunker erase it' - erase, not erode.
+
+    The probe places the fleet with its bottom row inside the band (LINT-RULES.md L056).
+    Marching there takes tens of thousands of frames, the fleet lands four drops later, and
+    the ship would be shot down long before; this stands in for that descent. Placed at the
+    fleet's own start x so the columns it crushes are the ones the arithmetic below
+    predicts, rather than wherever a clock-seeded run had drifted to."""
+    # Placed before frame 25, when the fleet fires its first shell: a shell reaches the band
+    # around frame 41, and cells it took would otherwise be scored against the crush.
+    place, total = 20, 200
+    # Bottom row's top edge two cell-rows into the band: deep enough that the crush is
+    # unambiguous, still eight rows short of the landing that would end the game.
+    crush_y = BUNKER_Y + 2 * BUNKER_CELL - (FLEET_ROWS - 1) * FLEET_ROW_SPACING
+    frames = run([(total, IDLE)], fleet_at=(place, FLEET_START_X, crush_y),
+                 lives=PLAYER_LIVES)
+    print(f"\nplace the fleet's bottom row inside the shields on frame {place}")
+
+    standing = bunker_live(frames[place - 2])
+    ok = check("the shields are whole when the fleet arrives",
+               standing == BUNKER_FULL * BUNKER_COUNT,
+               f"{standing} of {BUNKER_FULL * BUNKER_COUNT} cells standing on frame "
+               f"{place - 1}")
+
+    put = frames[place - 1]
+    ok &= check("the fleet is standing in the band, and has not landed",
+                put["fy"] == crush_y and not fleet_has_landed(put),
+                f"fleet at y {crush_y}, bottom row y "
+                f"{crush_y + (FLEET_ROWS - 1) * FLEET_ROW_SPACING}, band "
+                f"{BUNKER_Y}..{BUNKER_Y + BUNKER_H - 1}, landing at y {FLEET_LANDING_Y}")
+
+    covered = set()
+    for row in range(1, FLEET_ROWS + 1):
+        iy = put["fy"] + (row - 1) * FLEET_ROW_SPACING
+        for col in columns(put[ROWS[row - 1]]):
+            ix = put["fx"] + (col - 1) * FLEET_COL_SPACING
+            for b in range(1, BUNKER_COUNT + 1):
+                for bcol in range(1, BUNKER_COLS + 1):
+                    for brow in range(1, BUNKER_ROWS + 1):
+                        cx, cy, cx2, cy2 = cell_box(b, bcol, brow)
+                        if ix < cx2 and ix + SPRITE_W > cx and iy < cy2 and iy + SPRITE_H > cy:
+                            covered.add((b, bcol, brow))
+
+    left = {(b, col, row) for b in range(1, BUNKER_COUNT + 1)
+            for col, row in bunker_cells(put, b)}
+    ok &= check("every cell an invader is standing in is gone", not (covered & left),
+                f"{len(covered)} cells under the fleet, all erased"
+                if not (covered & left) else
+                f"{len(covered & left)} cells survived an invader, first "
+                f"{sorted(covered & left)[0]}")
+    ok &= check("the shields are crushed, not wiped", bool(left - covered),
+                f"{len(left)} cells left standing outside the fleet's footprint")
+
+    before = {(b, col, row) for b in range(1, BUNKER_COUNT + 1)
+              for col, row in bunker_cells(frames[place - 2], b)}
+    ok &= check("nothing outside the footprint was touched", before - left == covered & before,
+                f"exactly the {len(covered & before)} covered cells went, and nothing else"
+                if before - left == covered & before else
+                f"{len((before - left) - covered)} cells went that nothing stood in")
+    ok &= outlived_the_threat(frames)
+    return ok
+
+
 def main():
     ok = True
     ok &= scenario_move(LEFT, "left", lambda f: max(X_MIN, START_X - f))
@@ -893,6 +1287,11 @@ def main():
     ok &= scenario_player_death()
     ok &= scenario_out_of_lives()
     ok &= scenario_fleet_landing()
+    ok &= scenario_bunkers_intact()
+    ok &= scenario_bunker_blocks_bullet()
+    ok &= scenario_bunker_erodes_progressively()
+    ok &= scenario_shell_erodes_bunker()
+    ok &= scenario_fleet_crushes_bunkers()
     print("\nall scenarios passed" if ok else "\nsome scenarios failed")
     sys.exit(0 if ok else 1)
 

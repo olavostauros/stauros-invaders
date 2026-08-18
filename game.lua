@@ -91,6 +91,39 @@ local FLEET_ROW_POINTS = {
   10,
 }
 
+local BUNKER_COUNT = 4
+local BUNKER_COLS = 11
+local BUNKER_ROWS = 8
+local BUNKER_CELL = 2
+local BUNKER_W = BUNKER_COLS * BUNKER_CELL
+local BUNKER_H = BUNKER_ROWS * BUNKER_CELL
+local BUNKER_PITCH = math.floor(SCREEN_W / BUNKER_COUNT)
+local BUNKER_MARGIN = math.floor((BUNKER_PITCH - BUNKER_W) / 2)
+-- Low enough to leave clear sky above the ship, high enough that the fleet's bottom row
+-- overlaps the band for four drops before landing ends the game.
+local BUNKER_Y = 100
+
+local BUNKER_SHAPE = {
+  "..#######..",
+  ".#########.",
+  "###########",
+  "###########",
+  "###########",
+  "###########",
+  "####...####",
+  "###.....###",
+}
+
+-- Offsets cleared around an impact, in cells. Three deep in the bullet's own column, so
+-- repeated shots at one spot drill a channel through rather than shaving the face.
+local BUNKER_BLAST = {
+  { 0, 0 },
+  { -1, 0 },
+  { 1, 0 },
+  { 0, -1 },
+  { 0, 1 },
+}
+
 -- The cart carries no sprite sheet chunk, so the sheet is drawn here and blitted into
 -- tile RAM at boot. A '#' takes the entry's color, anything else stays transparent.
 local SPRITE_SHEET = {
@@ -242,6 +275,9 @@ game = {
   -- A fixed pool filled in BOOT() rather than a list that grows: the cap on shots in the
   -- air is the number of slots, and nothing allocates while the game is running.
   enemy_bullets = {},
+  -- cells is a plain boolean grid indexed [row][col], as fleet.alive is: a table per cell
+  -- would buy nothing, and there are 352 of them.
+  bunkers = {},
   -- x, y locate row 1 column 1; the fleet is rigid, so every invader's position derives
   -- from that origin. alive is indexed [row][col] and filled in BOOT(); count is what the
   -- step interval reads, so it is kept rather than recounted every frame.
@@ -285,6 +321,33 @@ local function build_fleet()
       cells[col] = true
     end
     game.fleet.alive[row] = cells
+  end
+end
+
+local function build_bunkers()
+  for index = 1, BUNKER_COUNT do
+    local cells = {}
+    for row = 1, BUNKER_ROWS do
+      cells[row] = {}
+    end
+    game.bunkers[index] = {
+      x = BUNKER_MARGIN + (index - 1) * BUNKER_PITCH,
+      y = BUNKER_Y,
+      cells = cells,
+    }
+  end
+end
+
+-- Kept apart from the allocation above so a wave can restore the shields without a table
+-- constructor running inside a frame.
+local function reset_bunkers()
+  for _, bunker in ipairs(game.bunkers) do
+    for row = 1, BUNKER_ROWS do
+      local mask = BUNKER_SHAPE[row]
+      for col = 1, BUNKER_COLS do
+        bunker.cells[row][col] = mask:sub(col, col) == "#"
+      end
+    end
   end
 end
 
@@ -458,6 +521,20 @@ local function draw_enemy_bullets()
   end
 end
 
+local function draw_bunkers()
+  for _, bunker in ipairs(game.bunkers) do
+    for row = 1, BUNKER_ROWS do
+      local cells = bunker.cells[row]
+      local y = bunker.y + (row - 1) * BUNKER_CELL
+      for col = 1, BUNKER_COLS do
+        if cells[col] then
+          rect(bunker.x + (col - 1) * BUNKER_CELL, y, BUNKER_CELL, BUNKER_CELL, C_GREEN)
+        end
+      end
+    end
+  end
+end
+
 local function draw_fleet()
   local fleet = game.fleet
   for row = 1, FLEET_ROWS do
@@ -472,6 +549,102 @@ local function draw_fleet()
 end
 
 -- collision
+
+-- Scanning starts at the edge the shot arrives from, so a rising bullet meets the shield's
+-- underside and a falling shell its roof, and each erodes the face it actually touches.
+local function bunker_cell(bunker, x, y, w, h, from_below)
+  if x >= bunker.x + BUNKER_W or x + w <= bunker.x or
+     y >= bunker.y + BUNKER_H or y + h <= bunker.y then
+    return nil
+  end
+  local first, last, step = 1, BUNKER_ROWS, 1
+  if from_below then first, last, step = BUNKER_ROWS, 1, -1 end
+  for row = first, last, step do
+    local cy = bunker.y + (row - 1) * BUNKER_CELL
+    if y < cy + BUNKER_CELL and y + h > cy then
+      local cells = bunker.cells[row]
+      for col = 1, BUNKER_COLS do
+        local cx = bunker.x + (col - 1) * BUNKER_CELL
+        if cells[col] and x < cx + BUNKER_CELL and x + w > cx then
+          return col, row
+        end
+      end
+    end
+  end
+  return nil
+end
+
+local function erode_bunker(bunker, col, row)
+  for _, offset in ipairs(BUNKER_BLAST) do
+    local c, r = col + offset[1], row + offset[2]
+    if c >= 1 and c <= BUNKER_COLS and r >= 1 and r <= BUNKER_ROWS then
+      bunker.cells[r][c] = false
+    end
+  end
+end
+
+local function collide_bullet_bunkers()
+  local bullet = game.bullet
+  if not bullet.active then return end
+  for _, bunker in ipairs(game.bunkers) do
+    local col, row = bunker_cell(bunker, bullet.x, bullet.y, BULLET_W, BULLET_H, true)
+    if col then
+      erode_bunker(bunker, col, row)
+      bullet.active = false
+      return
+    end
+  end
+end
+
+local function collide_enemy_bullets_bunkers()
+  for _, bullet in ipairs(game.enemy_bullets) do
+    if bullet.active then
+      for _, bunker in ipairs(game.bunkers) do
+        local col, row = bunker_cell(bunker, bullet.x, bullet.y,
+                                     ENEMY_BULLET_W, ENEMY_BULLET_H, false)
+        if col then
+          erode_bunker(bunker, col, row)
+          bullet.active = false
+          break
+        end
+      end
+    end
+  end
+end
+
+local function crush_bunker(bunker, x, y)
+  if x >= bunker.x + BUNKER_W or x + SPRITE_W <= bunker.x then return end
+  for row = 1, BUNKER_ROWS do
+    local cy = bunker.y + (row - 1) * BUNKER_CELL
+    if y < cy + BUNKER_CELL and y + SPRITE_H > cy then
+      local cells = bunker.cells[row]
+      for col = 1, BUNKER_COLS do
+        local cx = bunker.x + (col - 1) * BUNKER_CELL
+        if x < cx + BUNKER_CELL and x + SPRITE_W > cx then cells[col] = false end
+      end
+    end
+  end
+end
+
+-- An invader standing in a shield erases it outright rather than eroding it. Bounded by a
+-- single compare until the fleet has descended far enough to reach the band at all.
+local function crush_bunkers()
+  local fleet = game.fleet
+  if fleet.y + (FLEET_ROWS - 1) * FLEET_ROW_SPACING + SPRITE_H <= BUNKER_Y then return end
+  for row = 1, FLEET_ROWS do
+    local y = fleet.y + (row - 1) * FLEET_ROW_SPACING
+    if y < BUNKER_Y + BUNKER_H and y + SPRITE_H > BUNKER_Y then
+      for col = 1, FLEET_COLS do
+        if fleet.alive[row][col] then
+          local x = fleet.x + (col - 1) * FLEET_COL_SPACING
+          for _, bunker in ipairs(game.bunkers) do
+            crush_bunker(bunker, x, y)
+          end
+        end
+      end
+    end
+  end
+end
 
 local function invader_hit(row, col)
   local fleet = game.fleet
@@ -546,8 +719,14 @@ local function state_playing()
   update_enemy_bullets()
   update_fleet()
   enemy_fire()
+  -- The shields are read before the fleet: an invader low enough to share a pixel with a
+  -- bunker cell has already crushed it, so this never steals a kill.
+  collide_bullet_bunkers()
   collide_bullet_fleet()
+  collide_enemy_bullets_bunkers()
+  crush_bunkers()
   draw_player()
+  draw_bunkers()
   draw_bullet()
   draw_enemy_bullets()
   draw_fleet()
@@ -571,6 +750,7 @@ local function state_player_dead()
     end
   end
   draw_player_explosion()
+  draw_bunkers()
   draw_fleet()
 end
 
@@ -578,6 +758,7 @@ local function state_game_over()
   -- A ship is still standing only when the fleet landed on it; running out of lives left
   -- nothing to draw.
   if game.lives > 0 then draw_player() end
+  draw_bunkers()
   draw_enemy_bullets()
   draw_fleet()
 end
@@ -601,4 +782,6 @@ function BOOT()
   blit_sprite_sheet()
   build_fleet()
   build_enemy_bullets()
+  build_bunkers()
+  reset_bunkers()
 end

@@ -391,6 +391,38 @@ runs, six sequences). A scenario built on the false version passed once and then
 against a stream it had not seen. Determinism is a property to measure across processes
 and across seconds, not across a loop.*
 
+### L059 — a scenario asserts the geometry it is aiming through
+A scenario that fires a shot into what it believes is empty sky says so, against the
+current obstacle geometry, derived from the constants rather than hardcoded.
+`tools/inputsim.py`'s `fires_through_a_gap()` is one line per scenario. **Read.**
+
+This is L057 in space rather than in state, and `PROGRESS.md` §3 has now predicted the
+failure twice. A scenario written against an empty screen changes meaning the moment
+something is put in front of the ship, and it fails on its *conclusion* rather than on its
+premise — which reads as a regression in the very rule it was testing.
+
+*Added 2026-08-17 during M5, when four shields went in between the ship and the sky. Every
+M1–M4 scenario that fires does so from muzzle x 119 or x 3, and all of them still pass —
+but only because 119 sits in the 101..138 gap and 3 clears bunker 1 by 16 px, which was
+luck rather than a decision. `scenario_tap_while_in_flight` is the sharp case: six taps
+span exactly 60 frames against a 59-frame flight, so a shield that ate the bullet would
+free the slot early and let a later tap fire legitimately — reported as `6 bullet(s) from
+6 presses`, indistinguishable from M1's single-bullet rule breaking.*
+
+### L060 — a probe traces identity, not just quantity
+Where the game can destroy things one at a time, the probe reports *which* one, not how
+many. `row_masks()` and `bunker_masks()` both trace one bit per cell for this reason.
+**Read.**
+
+A count cannot tell a blast centred on row 8 from one centred on row 6, cannot show which
+face a shot ate into, and cannot separate an invader crushing a shield from a shell landing
+in the same column — all three of which are M5 acceptance criteria. Cousin of L055: that
+rule is about not encoding absence as a value, this one about not discarding identity.
+
+*Added 2026-08-17 during M5. The reasoning had been derived twice already — once for
+`kills()` in M3, once for `row_masks()` in M2 — without being written down, so M5 rederived
+it a third time before tracing 32 bunker row masks instead of 4 live-cell counts.*
+
 ## Extending these rules
 
 **This file is expected to grow.** It is a record of mistakes worth not repeating, so
