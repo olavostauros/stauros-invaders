@@ -74,7 +74,70 @@ this environment can otherwise do. Confirmed 2026-08-16: poking the byte inside 
 makes `btn()` report the button held, on the same frame. It does **not** make `btnp()`
 behave — see the `btnp` gotcha in `docs/tic80-api.md`.
 
+## WAVEFORMS — byte `0x0FFE4`, and SFX — byte `0x100E4`
+
+Read 2026-08-18 from https://github.com/nesbox/TIC-80/wiki/RAM, with the layout of one
+sample taken from the console's own `tic_sample` struct in `src/tic.h` (the wiki's
+`.tic` File Format page describes the chunk but is ambiguous about how a tick is packed).
+
+The cart ships no SFX chunk, so both regions boot zeroed and `game.lua` writes them in
+`BOOT()` — the same arrangement as the sprite sheet above.
+
+**WAVEFORMS** is 256 bytes: 16 waveforms of 32 four-bit points each, so waveform `w`
+starts at nibble `0x0FFE4 * 2 + w * 32` and each point is one `poke4`.
+
+A waveform whose 32 points are **all 0 or all 15** is not a flat tone — the console reads
+it as **noise** (`tic_tool_noise()`: every byte equal, and equal to `0x00` or `0xFF`).
+That is where both of the game's explosions get their hiss, and it is also why an
+unwritten waveform is not silence.
+
+**SFX** is 4,224 bytes: 64 samples of 66 bytes. Sample `s` starts at byte
+`0x100E4 + s * 66`, and every field of it is a nibble, so the whole sample is 132
+consecutive `poke4`s:
+
+| Nibble | Holds |
+|---|---|
+| `4t + 0` | volume of tick `t`, **stored as 15 minus the level it plays at** |
+| `4t + 1` | waveform index of tick `t` |
+| `4t + 2` | chord of tick `t` — semitones added to the note the `sfx()` call names |
+| `4t + 3` | pitch of tick `t` — a raw frequency offset, signed; unused here |
+| `120` | octave (bits 0..2) and the 16x pitch flag (bit 3) |
+| `121` | speed (bits 0..2, signed) and **reverse** (bit 3), which subtracts the chord |
+| `122` | note (bits 0..3) and the two stereo mute flags |
+| `123..131` | loop start and size for each of wave, volume, chord and pitch |
+
+There are 30 ticks, so nibbles 0..119 are the envelope. `game.lua` supplies the note, the
+octave and the speed through the `sfx()` call and writes zeros over the rest, so the only
+settings nibble it ever sets is reverse.
+
+Confirmed in-console 2026-08-18 (`scratch/sfxtest.lua`, `scratch/sfxtest2.lua`): a sample
+written this way played back at the note asked for, a chord of two semitones a tick with
+reverse set walked the frequency down 262, 233, 208, 185, 165, 147, 131, 117 Hz, and a
+waveform of 32 zeros came back in the register as 32 zeros.
+
+## SOUND REGISTERS — byte `0x0FF9C`
+
+72 bytes: four channels of 18. Channel `c` starts at byte `0x0FF9C + c * 18`:
+
+| Byte | Holds |
+|---|---|
+| 0 | frequency, low 8 bits |
+| 1 | frequency high 4 bits in the **low** nibble, volume 0..15 in the **high** nibble |
+| 2..17 | the 32-point waveform the sample copied in |
+
+The console rewrites all four every frame from whatever the channels are playing, and
+zeroes them first — so **volume 0 means the channel is silent**, and a nonzero volume is
+the only evidence available here that a sound is actually coming out. `tools/input-probe.lua`
+reads frequency and volume per channel and traces them; `LINT-RULES.md` L065 is the rule
+that every audio claim goes through them.
+
+Frequencies are the console's own note table, which a cart cannot read. The eight notes
+`game.lua` names were measured off these registers (`scratch/notes.lua`, 2026-08-18):
+note 30 → 92 Hz, 32 → 104, 34 → 117, 36 → 131, 48 → 262, 50 → 294, 55 → 392, 60 → 523.
+
 ## Not yet used
 
-`PERSISTENT MEMORY` at `0x14004` (1,024 bytes) backs `pmem` and arrives in M7. Record its
-details here when the high score gets written, not before.
+`PERSISTENT MEMORY` at `0x14004` (1,024 bytes) backs `pmem`, which M7 uses through the API
+rather than by poking; its slot semantics are in `docs/tic80-api.md`. `MUSIC PATTERNS` at
+`0x11164` and `MUSIC TRACKS` at `0x13E64` back `music()`, which nothing calls: the fleet's
+four-note loop is one `sfx()` per march step, not a tracker pattern.

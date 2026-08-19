@@ -73,6 +73,24 @@ FLEET_START_Y_MAX = BUNKER_Y - SPRITE_H - (FLEET_ROWS - 1) * FLEET_ROW_SPACING
 WAVE_FIRE_STEP, ENEMY_FIRE_FRAMES_MIN = 2, 15
 WAVE_STEP_TIGHTEN, FLEET_STEP_FRAMES_FLOOR = 5, 30
 EXTRA_LIFE_SCORE = 1500
+EXPLOSION_FRAMES, EXPLOSION_MAX, BONUS_FRAMES = 12, 4, 48
+UFO_EXPLODE_X = (UFO_W - SPRITE_W) // 2
+
+# game.lua's sound bank, mirrored: the channel each sound owns, the notes it names, and how
+# many frames of envelope it has. frames is the length of the volume string times 1 - speed,
+# which is what sfx_frames() computes.
+CHANNEL_SHOOT, CHANNEL_EXPLODE, CHANNEL_MARCH, CHANNEL_UFO = 0, 1, 2, 3
+SOUNDS = {
+    "shoot": dict(channel=CHANNEL_SHOOT, notes=(48,), frames=13, rising=True),
+    "invader": dict(channel=CHANNEL_EXPLODE, notes=(60,), frames=12, rising=False),
+    "player": dict(channel=CHANNEL_EXPLODE, notes=(36,), frames=38, rising=False),
+    "march": dict(channel=CHANNEL_MARCH, notes=(36, 34, 32, 30), frames=8, rising=None),
+    "ufo": dict(channel=CHANNEL_UFO, notes=(55, 50), frames=8, rising=None),
+}
+# The console's own note table is not readable from a cart, so the eight frequencies the
+# game's notes produce were measured off the sound registers rather than recalled
+# (scratch/notes.lua, 2026-08-18).
+NOTE_FREQ = {30: 92, 32: 104, 34: 117, 36: 131, 48: 262, 50: 294, 55: 392, 60: 523}
 HUD_LIVES_MAX = 5
 HI_SCORE_SLOT = 0
 
@@ -104,7 +122,12 @@ TRACE = (
     + tuple((f"b{b}r{row}", NUM) for b in range(1, BUNKER_COUNT + 1)
             for row in range(1, BUNKER_ROWS + 1))
     + (("ufo", FLAG), ("ufox", NUM), ("ufod", NUM), ("ufob", NUM), ("ufot", NUM))
-    + (("wave", NUM), ("hi", NUM), ("wtimer", NUM), ("extra", FLAG)))
+    + (("wave", NUM), ("hi", NUM), ("wtimer", NUM), ("extra", FLAG))
+    + tuple(field for slot in range(1, EXPLOSION_MAX + 1)
+            for field in ((f"x{slot}", NUM), (f"x{slot}x", NUM), (f"x{slot}y", NUM),
+                          (f"x{slot}b", NUM)))
+    + tuple(field for channel in range(4)
+            for field in ((f"c{channel}f", NUM), (f"c{channel}v", NUM))))
 
 FIELDS = tuple(name for name, _ in TRACE)
 FRAME_RE = re.compile(r"\[" + " ".join(f"({pat})" for _, pat in TRACE) + r"\]")
@@ -113,6 +136,8 @@ FRAME_RE = re.compile(r"\[" + " ".join(f"({pat})" for _, pat in TRACE) + r"\]")
 # died rather than only how many.
 ROWS = tuple(f"r{row}" for row in range(1, FLEET_ROWS + 1))
 SLOTS = tuple(f"e{slot}" for slot in range(1, ENEMY_BULLET_MAX + 1))
+# A burst's timer is its liveness, as the shells' active flag is theirs.
+BURSTS = tuple(f"x{slot}" for slot in range(1, EXPLOSION_MAX + 1))
 
 
 def value(text):
@@ -400,6 +425,23 @@ def first_overlap_frame(row):
     raise AssertionError(f"a bullet never reaches row {row}")
 
 
+def fold(script):
+    """A script as its shortest repeating cycle and the number of times that cycle runs.
+
+    Scenarios are written as `[(1, LEFT), (1, RIGHT)] * 1400` and used to be shipped to the
+    probe that way, one table entry per frame. The cart holds game.lua, the probe and this
+    table in one 64 KB code chunk, and the table is the only one of the three that grows
+    with the length of a run: at 2,800 entries it stopped fitting (LINT-RULES.md L064).
+    A script with no repetition folds to itself and one repeat, which is what it was."""
+    for size in range(1, len(script) + 1):
+        if len(script) % size:
+            continue
+        cycle = script[:size]
+        if cycle * (len(script) // size) == script:
+            return cycle, len(script) // size
+    return script, 1
+
+
 def run(script, clear_at=0, fleet_at=None, lives=0, keep=0, rush=0, endless=False,
         title=False, hi=None):
     """Run game.lua under the probe with `script` as [(frames, mask), ...] and return
@@ -435,8 +477,10 @@ def run(script, clear_at=0, fleet_at=None, lives=0, keep=0, rush=0, endless=Fals
     the only thing measuring it.
     """
     probe = open(os.path.join(ROOT, "tools", "input-probe.lua"), encoding="utf-8").read()
-    table = "{" + ",".join(f"{{{n},{m}}}" for n, m in script) + "}"
+    cycle, repeats = fold(script)
+    table = "{" + ",".join(f"{{{n},{m}}}" for n, m in cycle) + "}"
     probe = re.sub(r"local PROBE_SCRIPT = \{\}", f"local PROBE_SCRIPT = {table}", probe)
+    probe = re.sub(r"local PROBE_REPEAT = 1", f"local PROBE_REPEAT = {repeats}", probe)
     probe = re.sub(r"local PROBE_CLEAR = 0", f"local PROBE_CLEAR = {clear_at}", probe)
     probe = re.sub(r"local PROBE_LIVES = 0", f"local PROBE_LIVES = {lives}", probe)
     probe = re.sub(r"local PROBE_KEEP = 0", f"local PROBE_KEEP = {keep}", probe)
@@ -587,6 +631,144 @@ def outlived_the_threat(frames):
                  f"{died} death(s) survived over {len(frames)} frames" if not over else
                  f"game over on frame {over[0]['f']}, "
                  f"{len(over)} frames of the run measured nothing")
+
+
+
+FREQ_NOTE = {freq: note for note, freq in NOTE_FREQ.items()}
+
+
+def voices(frames, channel):
+    """The runs of frames a channel had a voice on, one list per sound.
+
+    Nothing in this environment can hear the console, and the SFX bank says what a sound
+    would be rather than whether one is playing. The sound registers say: each channel holds
+    the frequency and volume the mixer is using this frame, and a channel with nothing on it
+    reads volume zero (docs/tic80-ram.md). A run of nonzero-volume frames is therefore one
+    sound, and where it starts, how long it lasts and which way it bends are its identity
+    (LINT-RULES.md L060)."""
+    out, run_ = [], []
+    for fr in frames:
+        if fr[f"c{channel}v"]:
+            run_.append(fr)
+        elif run_:
+            out.append(run_)
+            run_ = []
+    if run_:
+        out.append(run_)
+    return out
+
+
+def voice_at(frames, channel, f):
+    """The run of sounding frames beginning on frame `f`, whether or not the channel was
+    already sounding when it did.
+
+    A sound retriggered on a channel that has not fallen silent leaves no gap in the
+    register, so voices() sees one run where there were two: an invader killed eleven frames
+    before the ship is hit runs straight into the ship's own death, and no voice *starts* on
+    the frame the death sounded on. Slicing from a frame a trigger is known to have happened
+    on is what separates them."""
+    out = []
+    for fr in frames:
+        if fr["f"] < f:
+            continue
+        if not fr[f"c{channel}v"]:
+            break
+        out.append(fr)
+    return out
+
+
+def began_playing(frames, fr):
+    """Whether a frame's updates ran under PLAYING.
+
+    The state traced on a frame is the one it *ended* in, so a frame that stepped the fleet
+    and then lost the ship to a shell traces PLAYER_DEAD - and its step was a playing
+    frame's step. Every timer in the game advances inside state_playing, so this, and not
+    the traced state, is their clock."""
+    i = fr["f"] - 2
+    return frames[i]["state"] == "PLAYING" if i >= 0 else True
+
+
+def voice_note(run_, channel):
+    """The note a run of sounding frames began on, or None if it began on a frequency the
+    game never names. Only the first frame identifies a sound: its chord bends the pitch
+    away from the note over the ticks that follow."""
+    return FREQ_NOTE.get(run_[0][f"c{channel}f"])
+
+
+def is_sound(run_, name):
+    """Whether a run of sounding frames is `name`: it starts on one of that sound's notes,
+    it is no longer than that sound's envelope, and it bends the way that sound's chord
+    bends it. Three sounds share the explosion channel and two of the five share a
+    frequency shape, so none of the three alone would separate them."""
+    sound = SOUNDS[name]
+    channel = sound["channel"]
+    freqs = [fr[f"c{channel}f"] for fr in run_]
+    if voice_note(run_, channel) not in sound["notes"] or len(run_) > sound["frames"]:
+        return False
+    if sound["rising"] is None:
+        return len(set(freqs)) == 1
+    steps = list(zip(freqs, freqs[1:]))
+    if sound["rising"]:
+        return freqs[-1] > freqs[0] and all(b >= a for a, b in steps)
+    return freqs[-1] < freqs[0] and all(b <= a for a, b in steps)
+
+
+def triggered_in(frames, voice):
+    """The state the frame that triggered a voice began in.
+
+    Two lags in a row, both measured rather than assumed. The sound registers catch up a
+    frame after the sfx() call that set them (scratch/sfxtest.lua, 2026-08-18), so a sound
+    heard on frame f was triggered on f - 1. And game.lua changes state at the end of a
+    frame, after that frame's updates have run, so the state traced on f - 1 is what it
+    *ended* in - the state its updates ran under is the one traced on f - 2. Read either lag
+    off by one and the note a dying frame was triggered *before* reads as a note triggered
+    during the pause."""
+    f = voice[0]["f"]
+    return frames[f - 3]["state"] if f >= 3 else "PLAYING"
+
+
+def triggered_while(frames, channel, state):
+    """The voices on `channel` whose trigger frame ran under `state`."""
+    return [voice for voice in voices(frames, channel)
+            if triggered_in(frames, voice) == state]
+
+
+def silent(frames, channel):
+    """Whether a channel had no voice at all across `frames`."""
+    return not any(fr[f"c{channel}v"] for fr in frames)
+
+
+def bursts(frame):
+    """The (x, y, timer) of every explosion slot with time left on it. The timer is the
+    liveness: a spent slot keeps the coordinates of the last burst it held (L055)."""
+    return [(frame[f"{slot}x"], frame[f"{slot}y"], frame[slot])
+            for slot in BURSTS if frame[slot]]
+
+
+def bonus_bursts(frame):
+    """The (x, y, timer, bonus) of every live burst standing in for a saucer's score."""
+    return [(frame[f"{slot}x"], frame[f"{slot}y"], frame[slot], frame[f"{slot}b"])
+            for slot in BURSTS if frame[slot] and frame[f"{slot}b"]]
+
+
+def note_gaps(frames, sounded):
+    """Playing frames between the steps two consecutive march notes belong to.
+
+    Between the steps rather than between the notes: a note sounds on the frame after its
+    step, and a death pause beginning in that one-frame offset would be counted on one side
+    of the gap and not the other. Playing frames rather than frames because the fleet timer
+    advances inside state_playing and nowhere else - and *began* playing, because the frame
+    that both steps the fleet and loses the ship traces PLAYER_DEAD while having marched."""
+    steps = [frames[voice[0]["f"] - 2] for voice in sounded]
+    return [sum(1 for fr in frames
+                if a["f"] < fr["f"] <= b["f"] and began_playing(frames, fr))
+            for a, b in zip(steps, steps[1:])]
+
+
+def steps_of(frames):
+    """The frames on which the fleet moved, read off the trace rather than modelled: a step
+    is the only thing that changes the fleet's position or its waddle frame."""
+    return [fr for prev, fr in zip(frames, frames[1:]) if fleet_of(fr) != fleet_of(prev)]
 
 
 def scenario_move(mask, label, expect):
@@ -1721,6 +1903,30 @@ def scenario_ufo_shot_down():
     ok &= check("a fresh interval is rolled the moment it dies",
                 all(UFO_SPAWN_MIN <= fr["ufot"] <= UFO_SPAWN_MAX for fr, _, _ in struck),
                 f"rolls after a kill: {sorted({fr['ufot'] for fr, _, _ in struck})}")
+
+    # M8's half of the same kill: the score jumps by a number the player never sees
+    # otherwise, so what the saucer was worth is left standing in the lane it died in.
+    left = [(fr["f"], bonus, bonus_bursts(fr)) for fr, _, bonus in struck]
+    ok &= check("and what it was worth is left standing where it died",
+                all(len(shown) == 1 and shown[0][3] == bonus and
+                    shown[0][1] == UFO_Y and shown[0][2] == BONUS_FRAMES
+                    for _, bonus, shown in left),
+                f"{len(left)} kill(s), each leaving its own bonus in the lane at y {UFO_Y}"
+                if all(len(shown) == 1 and shown[0][3] == bonus for _, bonus, shown in left)
+                else f"first mismatch: {left[0]}")
+    # The burst is out and the lane is empty again well before the next saucer is due, so
+    # the number can never be read against the wrong crossing.
+    gone = [fr for fr in frames
+            if any(fr["f"] - kill["f"] > BONUS_FRAMES for kill, _, _ in struck)
+            and bonus_bursts(fr)]
+    lingering = [fr["f"] for fr in gone
+                 if all(fr["f"] - kill["f"] > BONUS_FRAMES or fr["f"] < kill["f"]
+                        for kill, _, _ in struck)]
+    ok &= check("and it goes out on its own", not lingering,
+                f"no bonus stood for more than the {BONUS_FRAMES} frames it is given"
+                if not lingering else
+                f"{len(lingering)} frames with a bonus older than that, first "
+                f"{lingering[0]}")
     ok &= outlived_the_threat(frames)
     return ok
 
@@ -1835,6 +2041,346 @@ def frozen_fields(frames):
     update_ufo() call would move it and nothing else in the suite would notice."""
     return {(fleet_of(fr), fr["score"], fr["lives"], fr["ufo"], fr["ufox"], fr["ufot"],
              tuple(fr[slot] for slot in SLOTS)) for fr in frames}
+
+
+
+def scenario_shot_sound():
+    """MISSION.md section 6's first required sound, and the rule it has to obey: one shot,
+    one sound. The middle press of the three is made while the bullet is still up, where
+    fire() refuses it - a sound there would mean the sound is hung off the button rather
+    than off the shot.
+
+    The sky is emptied because it is not the subject: a living fleet marches, and the march
+    is a sound of its own on a channel of its own (L062 - PROBE_ENDLESS belongs to
+    scenarios like this one, whose subject predates waves)."""
+    press = (1, 6, 62)
+    frames = run([(1, FIRE), (4, IDLE), (1, FIRE), (55, IDLE), (1, FIRE), (60, IDLE)],
+                 clear_at=1, endless=True)
+    fired = shots(frames)
+    heard = voices(frames, CHANNEL_SHOOT)
+    print(f"\nfire on frames {press[0]} and {press[2]}, and again on {press[1]} with the "
+          f"first bullet still up")
+
+    ok = check("three presses put two bullets in the air", len(fired) == 2,
+               f"bullets on frames {[fr['f'] for fr in fired]}, of presses on "
+               f"{list(press)}")
+    ok &= check("and two sounds, not three", len(heard) == 2,
+                f"{len(heard)} voice(s) on channel {CHANNEL_SHOOT}, starting on "
+                f"{[voice[0]['f'] for voice in heard]}")
+    if len(heard) != 2:
+        return False
+
+    ok &= check("each is the shot: a rising sweep from its own note",
+                all(is_sound(voice, "shoot") for voice in heard),
+                "; ".join(f"{voice_note(voice, CHANNEL_SHOOT)} for {len(voice)} frames, "
+                          f"{voice[0][f'c{CHANNEL_SHOOT}f']} to "
+                          f"{voice[-1][f'c{CHANNEL_SHOOT}f']} Hz" for voice in heard))
+    # The register is written by the sound tick that follows the call, so a sound starts on
+    # the frame after the shot it belongs to. Measured, not assumed (scratch/sfxtest.lua).
+    ok &= check("each sound starts on the frame after the shot it belongs to",
+                [voice[0]["f"] for voice in heard] == [fr["f"] + 1 for fr in fired],
+                f"shots on {[fr['f'] for fr in fired]}, sounds on "
+                f"{[voice[0]['f'] for voice in heard]}")
+    ok &= check("nothing else is playing behind it",
+                all(silent(frames, channel) for channel in
+                    (CHANNEL_EXPLODE, CHANNEL_MARCH, CHANNEL_UFO)),
+                "the explosion, march and saucer channels stayed silent for all "
+                f"{len(frames)} frames")
+    return ok
+
+
+def scenario_invader_death():
+    """MISSION.md section 6's "invader destroyed" and section 8's explosion animation, which
+    are the same event seen twice: the burst goes off where the invader stood and the noise
+    goes off on the frame it died.
+
+    The shot is the one scenario_kill_bottom_row uses - fired from the start position at a
+    fleet that has not stepped yet, so which invader dies is arithmetic rather than luck.
+
+    The fleet is teleported while the burst is still alight (L056). A full fleet steps every
+    55 frames and a burst is out in 12, so nothing this scenario can wait for would ever move
+    the fleet out from under one - and "the burst marks where the invader died" is only an
+    assertion if the fleet has since gone somewhere else."""
+    moved = (30, 60, 30)
+    frames = run([(1, FIRE), (60, IDLE)], lives=PLAYER_LIVES, fleet_at=moved)
+    killed = kills(frames)
+    print("\nfire once from the start position, watch the invader go, and move the fleet "
+          "out from under the burst")
+
+    ok = check("the shot killed an invader", len(killed) == 1,
+               f"{len(killed)} kill(s): {[(fr['f'], row, cols) for fr, row, cols, _ in killed]}")
+    if len(killed) != 1:
+        return False
+
+    hit, row, cols, _ = killed[0]
+    dead_x = hit["fx"] + (cols[0] - 1) * FLEET_COL_SPACING
+    dead_y = hit["fy"] + (row - 1) * FLEET_ROW_SPACING
+    ok &= check("a burst goes off in the cell the invader was standing in",
+                bursts(hit) == [(dead_x, dead_y, EXPLOSION_FRAMES)],
+                f"burst at {bursts(hit)}, against the row {row} column {cols[0]} cell at "
+                f"({dead_x}, {dead_y})")
+    ok &= check("nothing was burning before the shot landed",
+                not any(bursts(fr) for fr in frames if fr["f"] < hit["f"]),
+                f"no burst in the {hit['f'] - 1} frames before the kill")
+
+    lit = [fr for fr in frames if bursts(fr)]
+    ok &= check("and it burns for its own length and then stops",
+                len(lit) == EXPLOSION_FRAMES and
+                [fr["f"] for fr in lit] == list(range(hit["f"], hit["f"] + EXPLOSION_FRAMES)),
+                f"{len(lit)} frames of burst, {lit[0]['f']}..{lit[-1]['f']}, against "
+                f"{EXPLOSION_FRAMES}")
+    ok &= check("the fleet moved on while it was still burning",
+                lit[0]["fx"] != lit[-1]["fx"] or lit[0]["fy"] != lit[-1]["fy"],
+                f"fleet at ({lit[0]['fx']}, {lit[0]['fy']}) when the invader died and "
+                f"({lit[-1]['fx']}, {lit[-1]['fy']}) when the burst went out")
+    ok &= check("and the burst stayed where the invader was, not with the fleet",
+                len({(fr[f"{BURSTS[0]}x"], fr[f"{BURSTS[0]}y"]) for fr in lit}) == 1,
+                f"held ({dead_x}, {dead_y}) for all {len(lit)} frames")
+
+    heard = voices(frames, CHANNEL_EXPLODE)
+    from_kill = voice_at(frames, CHANNEL_EXPLODE, hit["f"] + 1)
+    ok &= check("a sound on the explosion channel, on the frame after the kill",
+                bool(from_kill),
+                f"{len(from_kill)} frame(s) of voice from frame {hit['f'] + 1}, against a "
+                f"kill on frame {hit['f']}")
+    if not from_kill:
+        return False
+    ok &= check("and it is the invader's death, not the ship's",
+                is_sound(from_kill, "invader") and not is_sound(from_kill, "player"),
+                f"note {voice_note(from_kill, CHANNEL_EXPLODE)} falling to "
+                f"{from_kill[-1][f'c{CHANNEL_EXPLODE}f']} Hz over "
+                f"{len(from_kill)} frames")
+    # The ship is standing under the fleet with the guns live, and the first shell of a
+    # game lands about here: it shares this channel, and it is the only thing that may.
+    # Asserted rather than excluded, so a third sound appearing would still be caught.
+    others = [voice for voice in heard if voice[0]["f"] != from_kill[0]["f"]]
+    ok &= check("and nothing else went off on it but the ship being shot",
+                all(is_sound(voice, "player") for voice in others),
+                f"{len(others)} other voice(s), "
+                f"{[voice_note(voice, CHANNEL_EXPLODE) for voice in others]}, all of them "
+                f"the ship's own death" if others else "nothing else sounded on it")
+    return ok
+
+
+def scenario_player_death_sound():
+    """MISSION.md section 6's "player destroyed". The same jitter scenario_player_death uses,
+    for the same reason: the fleet aims at a column it picks at random, so the frame the ship
+    dies on cannot be scripted and everything here is read out of the trace.
+
+    The ship shoots where it stands, so the pool of bursts is in use throughout - which is
+    what makes "no burst survives into the death pause" an assertion about clearing them
+    rather than about a pool that was empty anyway. Whether a burst happens to be alight on
+    the frame the ship is hit is luck; that none is alight during any of the 90 frames after
+    it is the rule.
+
+    One press every 60 frames rather than a jitter on every frame: the cart has room for the
+    code plus the probe plus the script table, and 2,400 one-frame segments no longer fit
+    (LINT-RULES.md L064). Standing still gets the ship shot as surely as jittering does -
+    M4 measured a ship under the fleet dying about every 400 frames - and the input it is
+    given while dying is scenario_player_death's subject, not this one's."""
+    total = 2400
+    frames = run([(1, FIRE), (SHOT_PERIOD - 1, IDLE)] * (total // SHOT_PERIOD),
+                 lives=PLAYER_LIVES)
+    died = [fr for prev, fr in zip(frames, frames[1:])
+            if fr["state"] == "PLAYER_DEAD" and prev["state"] == "PLAYING"]
+    print(f"\nstand under the fleet firing for {total} frames and get shot")
+
+    ok = check("standing under the fleet gets the ship killed", bool(died),
+               f"first death on frame {died[0]['f']}" if died
+               else f"never hit in {total} frames")
+    ok &= check("and the run put the burst pool to work", bool(kills(frames)),
+                f"{len(kills(frames))} invader(s) killed over the run")
+    if not died:
+        return False
+
+    hit = died[0]["f"]
+    after = [fr for fr in frames if hit <= fr["f"] < hit + PLAYER_DEAD_FRAMES]
+    ok &= check("the run is long enough to hear the whole death",
+                hit + PLAYER_DEAD_FRAMES <= total,
+                f"died on frame {hit}, {total - hit} frames left of the run")
+    if hit + PLAYER_DEAD_FRAMES > total:
+        return False
+
+    # voice_at rather than voices: the ship shoots as it stands, and a kill in the frames
+    # before it is hit is still sounding on this channel when the death replaces it, which
+    # leaves the two as one unbroken run of register frames.
+    started = voice_at(frames, CHANNEL_EXPLODE, hit + 1)
+    ok &= check("a sound is playing on the frame after the ship is hit", bool(started),
+                f"{len(started)} frame(s) of voice from frame {hit + 1}")
+    if not started:
+        return False
+    ok &= check("and it is the ship's death, not an invader's",
+                is_sound(started, "player") and not is_sound(started, "invader"),
+                f"note {voice_note(started, CHANNEL_EXPLODE)} falling to "
+                f"{started[-1][f'c{CHANNEL_EXPLODE}f']} Hz over {len(started)} "
+                f"frames, against the invader's {SOUNDS['invader']['notes'][0]}")
+    ok &= check("and nothing else is set off while the ship is dying",
+                not triggered_while(frames, CHANNEL_EXPLODE, "PLAYER_DEAD"),
+                f"no explosion triggered in any of the {len(frames)} frames, outside the "
+                f"one that starts each pause")
+    dying = [fr for fr in frames if fr["state"] == "PLAYER_DEAD"]
+    deaths = sum(1 for prev, fr in zip(frames, frames[1:])
+                 if fr["state"] == "PLAYER_DEAD" and prev["state"] != "PLAYER_DEAD")
+    ok &= check("and no burst is left alight in any pause of the run",
+                not any(bursts(fr) for fr in dying),
+                f"no burst in any of the {len(dying)} frames the ship spent dying, over "
+                f"{deaths} death(s)")
+    # Not that the gun is silent through the pause - a shot fired in the frames before the
+    # ship was hit rings on through it, which is what a sound with an envelope does - but
+    # that the frozen input fires no new one.
+    ok &= check("nor can the frozen ship fire another shot",
+                not triggered_while(frames, CHANNEL_SHOOT, "PLAYER_DEAD"),
+                f"no shot triggered in the {len(dying)} frames the ship spent dying")
+    ok &= outlived_the_threat(frames)
+    return ok
+
+
+
+def scenario_march_loop():
+    """MISSION.md section 6's fourth required sound and the hard half of it: "the four-note
+    descending fleet loop, whose tempo tracks the fleet's step interval".
+
+    Two runs, because tempo is a comparison and one run only shows a rate. A full fleet steps
+    every 55 frames and eight invaders step every 8, so if the loop has a clock of its own
+    the second run is where it shows. The notes are read off the sound registers in order,
+    which is what makes "four descending notes" an assertion rather than a look at the
+    table."""
+    notes = SOUNDS["march"]["notes"]
+    ok = check("the four notes of the loop descend",
+               list(notes) == sorted(notes, reverse=True),
+               f"notes {list(notes)}, frequencies "
+               f"{[NOTE_FREQ[note] for note in notes]} Hz")
+
+    frames = run([(660, IDLE)], lives=PLAYER_LIVES)
+    # A step on the last frame of the run sounds on the frame after it, which is not in the
+    # trace. The window is what is short, not the march.
+    stepped = [fr for fr in steps_of(frames) if fr["f"] < frames[-1]["f"]]
+    heard = voices(frames, CHANNEL_MARCH)
+    print(f"\nstand still under a full fleet for {len(frames)} frames and count the march")
+
+    ok &= check("the fleet marched", len(stepped) > 4,
+                f"{len(stepped)} step(s) in {played(frames)} playing frames")
+    ok &= check("one note per step, and none without one",
+                [voice[0]["f"] for voice in heard] == [fr["f"] + 1 for fr in stepped],
+                f"{len(heard)} note(s) against {len(stepped)} step(s)"
+                if len(heard) != len(stepped) else
+                f"every one of {len(stepped)} steps sounded on the frame after it")
+    if len(heard) != len(stepped):
+        return False
+
+    played_notes = [voice_note(voice, CHANNEL_MARCH) for voice in heard]
+    want = [notes[i % len(notes)] for i in range(len(played_notes))]
+    ok &= check("the notes cycle through all four in order", played_notes == want,
+                f"notes {played_notes}" if played_notes == want else
+                f"notes {played_notes}, expected {want}")
+    ok &= check("each note is one steady tone, not a sweep",
+                all(is_sound(voice, "march") for voice in heard),
+                f"all {len(heard)} held one frequency for at most "
+                f"{SOUNDS['march']['frames']} frames")
+
+    # This is the clock PROGRESS.md section 3 records three flakes for.
+    slow = note_gaps(frames, heard)
+    thin = run([(400, IDLE)], clear_at=1, keep=8, lives=PLAYER_LIVES)
+    thin_heard = voices(thin, CHANNEL_MARCH)
+    thin_stepped = [fr for fr in steps_of(thin) if fr["f"] < thin[-1]["f"]]
+    quick = note_gaps(thin, thin_heard)
+    interval = step_frames(FLEET_COUNT)
+    thinned = step_frames(8)
+    print("then thin the fleet to 8 and count it again")
+    ok &= check("a full fleet sounds a note every step interval",
+                bool(slow) and all(gap == interval for gap in slow),
+                f"{len(slow)} gaps of {sorted(set(slow))} playing frames, against a step "
+                f"every {interval}")
+    ok &= check("a thinned fleet still sounds one note per step",
+                [voice[0]["f"] for voice in thin_heard] ==
+                [fr["f"] + 1 for fr in thin_stepped],
+                f"{len(thin_heard)} note(s) against {len(thin_stepped)} step(s)")
+    ok &= check("eight invaders sound one every step interval of theirs",
+                bool(quick) and all(gap == thinned for gap in quick),
+                f"{len(quick)} gaps of {sorted(set(quick))} playing frames, against a step "
+                f"every {thinned}")
+    ok &= check("so the loop's tempo is the fleet's own, not a clock of its own",
+                thinned < interval and min(quick) < min(slow),
+                f"{interval} frames a note at {FLEET_COUNT} alive, {thinned} at 8")
+    ok &= outlived_the_threat(frames)
+    return ok
+
+
+def scenario_ufo_warble():
+    """MISSION.md section 6's optional saucer warble, which is the only sound with no event
+    to hang off: it lasts as long as the crossing does. Two notes a fifth apart, retriggered
+    as each runs out, so it stops when the saucer stops being updated - during a death pause,
+    and for good when it leaves the lane or is shot down.
+
+    The rush forcing is scenario_ufo_crossings' (L056): it shortens the wait between saucers
+    and touches nothing about a crossing. The ship stands and fires rather than walking,
+    which is what puts deaths in the run: the pause check is about a siren that stops when
+    the saucer stops being updated, and a run nothing ever kills has nothing to check it
+    against."""
+    frames = run([(1, FIRE), (SHOT_PERIOD - 1, IDLE)] * 43, lives=PLAYER_LIVES,
+                 rush=UFO_RUSH)
+    flights = ufo_flights(frames)
+    done = [(live, gone) for live, gone in flights if gone is not None]
+    print(f"\ncompress the wait to {UFO_RUSH} frames, stand and fire, and listen to "
+          f"{len(done)} crossings")
+
+    ok = check("the run saw a complete crossing", bool(done),
+               f"{len(done)} complete of {len(flights)} started")
+    if not done:
+        return False
+
+    live, gone = done[0]
+    crossing = [fr for fr in frames if live[0]["f"] <= fr["f"] <= live[-1]["f"]]
+    before = [fr for fr in frames if fr["f"] < live[0]["f"]]
+    heard = voices(crossing, CHANNEL_UFO)
+    ok &= check("nothing on the saucer's channel before one arrives", silent(before, CHANNEL_UFO),
+                f"silent for the {len(before)} frames before the first crossing")
+    # A note every envelope's worth of *playing* frames: a death pause freezes the saucer
+    # and its siren with it, so a crossing interrupted by one is longer in frames than it is
+    # in notes. One either way for the note the crossing's end clips.
+    aloft = sum(1 for fr in live if fr["state"] == "PLAYING")
+    due = aloft // SOUNDS["ufo"]["frames"]
+    ok &= check("the saucer sounds for as long as it is up", abs(len(heard) - due) <= 1,
+                f"{len(heard)} note(s) over {aloft} playing frames of a {len(live)}-frame "
+                f"crossing, against the {due} an {SOUNDS['ufo']['frames']}-frame envelope "
+                f"retriggers")
+
+    sung = [voice_note(voice, CHANNEL_UFO) for voice in heard]
+    want = [SOUNDS["ufo"]["notes"][i % 2] for i in range(len(sung))]
+    ok &= check("on two notes, alternating, which is the warble", sung == want,
+                f"{len(sung)} notes alternating "
+                f"{NOTE_FREQ[SOUNDS['ufo']['notes'][0]]}/"
+                f"{NOTE_FREQ[SOUNDS['ufo']['notes'][1]]} Hz"
+                if sung == want else f"notes {sung[:12]}, expected {want[:12]}")
+    ok &= check("and every one of them is the saucer's own sound",
+                all(is_sound(voice, "ufo") for voice in heard),
+                f"all {len(heard)} held one frequency for at most "
+                f"{SOUNDS['ufo']['frames']} frames")
+
+    # The siren is cut in reset_ufo(), which is where both ways out of the lane meet - and
+    # the register catches up a frame later, as it does with every sound in this file. Every
+    # completed crossing rather than the first: one of them may have been shot down, and
+    # that is the other way out.
+    after = [[fr for fr in frames
+              if last["f"] < fr["f"] <= last["f"] + SOUNDS["ufo"]["frames"]]
+             for _, last in ((live, gone) for live, gone in done)]
+    ok &= check("it stops when the saucer goes",
+                all(silent(window, CHANNEL_UFO) for window in after),
+                f"silent for the {SOUNDS['ufo']['frames']} frames after each of "
+                f"{len(done)} crossings ended")
+
+    # Read against the state the *triggering* frame ran under, which is two frames back:
+    # see triggered_in(). The last note of a crossing the ship dies on sounds on a frame
+    # already marked PLAYER_DEAD without having been retriggered in one.
+    dying = [fr for fr in frames if fr["state"] == "PLAYER_DEAD"]
+    started = triggered_while(frames, CHANNEL_UFO, "PLAYER_DEAD")
+    ok &= check("and it does not sing through a death pause",
+                not started,
+                f"no note was triggered in the {len(dying)} frames the ship spent dying"
+                if not started else
+                f"{len(started)} note(s) triggered during a death pause")
+    ok &= outlived_the_threat(frames)
+    return ok
 
 
 def scenario_title_screen():
@@ -2297,6 +2843,11 @@ def main():
     ok &= scenario_wave_difficulty()
     ok &= scenario_extra_life()
     ok &= scenario_high_score()
+    ok &= scenario_shot_sound()
+    ok &= scenario_invader_death()
+    ok &= scenario_player_death_sound()
+    ok &= scenario_march_loop()
+    ok &= scenario_ufo_warble()
     print("\nall scenarios passed" if ok else "\nsome scenarios failed")
     sys.exit(0 if ok else 1)
 

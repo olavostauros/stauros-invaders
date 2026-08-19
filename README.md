@@ -158,6 +158,10 @@ ship dies on a different frame every run and the mystery ship arrives 15 to 25 s
 screen. Both usually want `--lives 3`, which pins the life count so the game does not end
 before the frame you are waiting for arrives.
 
+`--boom` waits for an explosion to be alight and `--bonus` for the number a shot-down
+saucer leaves behind — neither is on screen for long, and which invader a shot reaches
+depends on where the fleet has marched to.
+
 Two screens need more than waiting. `--clear <frame>` empties the fleet, which is the only
 way to reach the wave banner — killing 55 invaders by holding fire takes tens of thousands
 of frames and the ship is shot down first. And `--state GAME_OVER` wants the default
@@ -183,6 +187,11 @@ gamepad byte before each frame, and traces the `game` table afterwards, so behav
 read out of the game's own state rather than guessed at. Masks are `1 << button`:
 left is 4, right 8, fire 16, so `--hold 24` is right-plus-fire.
 
+A script is written as `[(1, LEFT), (1, RIGHT)] * 1400` and shipped as its shortest
+repeating cycle plus a count: the cart holds `game.lua`, the probe and the script table in
+one 64 KB chunk, and the table is the only part that grows with the length of a run
+(`LINT-RULES.md` L064).
+
 `run()` takes five forcings for states a script cannot reach in reasonable time, each
 standing in for a player action: `clear_at` kills the remaining invaders on a frame, `keep`
 leaves that many standing instead, `fleet_at` teleports the fleet, `lives` holds the life
@@ -195,6 +204,25 @@ hold fire for 300 frames
   PASS  one bullet, not a stream: 1 bullet(s) spawned in 300 frames of held fire
   PASS  bullet rises 2 px per frame: y 115 -> -1 over 59 frames, step set [2]
 ```
+
+### Hearing the sound, without speakers
+
+The same trick again, one region over. Nothing here can listen to the console, and the SFX
+bank only says what a sound *would* be. What is actually playing is in the sound registers
+at `0x0FF9C`: a frequency and a volume per channel, rewritten every frame and zeroed when a
+channel goes quiet. `tools/input-probe.lua` traces all four, so a scenario can say which
+sound fired, on which channel, on which note, for how long, and that it stopped:
+
+```
+  PASS  one note per step, and none without one: every one of 11 steps sounded on the
+        frame after it
+  PASS  the notes cycle through all four in order: notes [36, 34, 32, 30, 36, 34, 32, ...]
+```
+
+Two lags sit between an event and its register, and both are measured rather than assumed:
+the register catches up the frame after the `sfx()` call, and `game.lua` changes state at
+the end of a frame, so an event's state is the one traced two frames back. This is
+`LINT-RULES.md` L065.
 
 **One catch.** `btn` reads that RAM and works perfectly. `btnp` does not — it compares
 against a snapshot taken from the real input device, so a poked hold looks like a fresh
@@ -217,6 +245,17 @@ would be circular if TIC-80 derived it from the frame counter — it does not. P
 `--hold` only reaches things a button controls. For an entity that arrives on a timer, pass
 `--samples <short> <long>` to move the measured window to where it actually is — the default
 300 and 1200 can miss the mystery ship entirely.
+
+Each sample also reports the load it was measured under — the state and invader count it
+ended on, and across the whole sample how many frames had the saucer up, the most bursts
+and the most channels sounding at once, and how many frames made any sound at all. A frame
+rate is only as good as what was on screen for it:
+
+```
+sample  2400: console FPS 59.999 over 2400 frames in 40001.0 ms   host 41.13 s
+            LOAD state PLAYING invaders 49 saucerframes 440 peakbursts 1 peakvoices 4
+                 soundingframes 1015
+```
 
 ## Linting
 

@@ -86,6 +86,14 @@ column fires or on which frame the ship dies, and cannot re-run a script expecti
 same shots. Assert the *rule* — grid alignment, cadence, bottom-most-in-column — over
 whatever the fleet happens to do that run.
 
+### `pairs` and `tonumber` are present
+
+Confirmed in-console 2026-08-18 for M8's sound bank. `tonumber(s, 16)` returns a number for
+a hex digit and **nil for an empty string**, which is what lets an envelope shorter than 30
+ticks be read tick by tick without a length check — `tonumber(s:sub(31, 31), 16) or 0` is
+the silent tail. `pairs` walks the five sounds, which are keyed by name rather than by
+index; nothing depends on the order, since every sound carries the id it is written to.
+
 Everything else is **unverified**. `AGENTS.md` §2 says to assume `require`, `io.*`,
 `os.execute`, file access, and `package` are unavailable until proven otherwise, and
 nothing so far has proven otherwise. Test in-console before using any stdlib table not

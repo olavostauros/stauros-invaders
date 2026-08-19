@@ -32,6 +32,7 @@ grep -nE '(^|[^-])//|[^:]goto |<<|>>|math\.type|<close>' game.lua             # 
 grep -n 'DEBUG *= *true' game.lua                                             # L041
 grep -nE '^\s*print\(' game.lua | grep -v 'print(text, x, y, color, true, scale, false)'  # L008
 [ game.tic -nt game.lua ] || echo "L050: game.tic is stale, run python3 pack.py"
+[ $(grep -c '^local ' game.lua) -le 185 ] || echo "L063: game.lua is over its local budget"
 ```
 
 Each command should print nothing, except three that print lists to be read: the `_ENV`
@@ -139,8 +140,15 @@ calls (`TIC`, `BOOT`), a documented TIC-80 API function, a Lua stdlib table (`ma
 accidental global from a missing `local` — which in TIC-80 persists across frames and
 produces bugs that look like corruption. `AGENTS.md` §2, §5. **Automated + read.**
 
-Current allowlist: `TIC`, `BOOT`, `game`, `math`, `string`, `ipairs`, `_VERSION`, plus
-documented API calls.
+Current allowlist: `TIC`, `BOOT`, `game`, `math`, `string`, `ipairs`, `pairs`, `tonumber`,
+`_VERSION`, plus documented API calls.
+
+*Amended 2026-08-18 during M8: `pairs` and `tonumber` added, and `sfx` appears among the
+API calls. Both arrive with the sound bank: the five sounds are keyed by name in one table
+because five constants would not fit the local budget (L063), and `pairs` is how a table
+keyed by name is walked — the order cannot matter, since every sound carries the id it is
+written to. `tonumber` reads the hex digit of a volume or a chord out of an envelope
+string, the same way `s:sub()` reads a pixel out of the sprite sheet.*
 
 *Amended 2026-08-18 during M7: `string` added, and `pmem` and `print` appear among the API
 calls. `string` is a stdlib table like `math` — it arrives with `string.format`, which is
@@ -502,6 +510,65 @@ forcing puts `WAVE_CLEAR` back to `PLAYING` and does nothing else, which is only
 because entering `WAVE_CLEAR` sets the state and a timer and nothing else; if the
 transition ever grows work, this rule is the note that says the forcing has to grow with
 it. `scenario_wave_transition` measures the transition without it.*
+
+### L063 — the main chunk has 200 locals and the probes share them
+Lua allows 200 local variables in one function, and a cartridge's top level is one. A
+verification probe is *concatenated onto* `game.lua` (L053), so its own locals are counted
+against the same 200. `game.lua` keeps its top-level count under 185, and every probe in
+`tools/` wraps its body in a `local function probe() ... end probe()` so that its locals
+are its own.
+
+*Added 2026-08-18 during M8. The milestone took `game.lua` from 159 top-level locals to
+184, and the first scenario run after that failed to load at all —* `too many local
+variables (limit is 200) in main function` *— pointing at a line in the probe. Nothing was
+wrong with either file: the cart ran perfectly on its own, and the probe had been fine for
+seven milestones. Grouping the five sound definitions into one `SFX` table bought five
+back, and wrapping the probes bought thirty. The ceiling is 185 rather than 200 because the
+failure surfaces in the harness rather than in the cart, and the difference is the room the
+next probe needs.*
+
+---
+
+### L064 — a scenario's script is a cycle, not a list of frames
+The probe cart is `game.lua`, the probe, and the scripted input table in one 64 KB code
+chunk. The first two are fixed; the table is the one that grows with the length of a run.
+`run()` folds a script into its shortest repeating cycle and a count (`fold()`), so
+`[(1, LEFT), (1, RIGHT)] * 1400` ships as two entries rather than 2,800. A scenario that
+needs a long run buys frames per segment, not segments. **Read**, plus the size check
+`pack.py` already makes.
+
+*Added 2026-08-18 during M8. M8 added 9 KB of code to `game.lua` and a KB to the probe, and
+`scenario_ufo_freezes_on_death` — an M6 scenario, untouched — stopped packing: 2,800
+one-frame segments no longer fit beside them. PROGRESS.md had recorded the underlying limit
+since M7 ("long scenarios buy frames per segment, not segments"), which is exactly the kind
+of fact that gets rediscovered as a failure rather than applied. Folding also stopped
+`mask_at()` scanning the whole script on every frame of it.*
+
+---
+
+### L065 — a sound is verified from the sound registers, never from the call
+Nothing in this environment can hear the console, and the SFX bank in RAM says only what a
+sound *would* be. What is actually playing is in the sound registers at `0x0FF9C`: a
+frequency and a volume per channel, rewritten every frame, zero volume when a channel is
+idle. Every claim about audio — that a sound fired, on which channel, on which note, for
+how long, and that it stopped — reads those. Two lags sit between an event and its
+register, and both are measured rather than assumed: the register catches up the frame
+after the `sfx()` call, and `game.lua` changes state at the end of a frame, so an event's
+state is the one traced two frames back (`triggered_in()` in `tools/inputsim.py`). **Read.**
+
+A channel is not a sound. Four channels carry five sounds, so which sound a voice *is* —
+its note, its length, which way it bends — is what a scenario asserts, never a count of
+voices on a channel. And a sound retriggered on a channel that has not fallen silent leaves
+**no gap in the register**: a run of nonzero volume is one sound, but not every sound begins
+one. Slice from a frame a trigger is known to have happened on (`voice_at()`).
+
+*Added 2026-08-18 during M8. This is L051 for audio — that rule exists because a clean run
+says nothing about what is on screen, and a clean run says even less about what is coming
+out of the speakers. Five of M8's failures were this rule's edges rather than the cart: two
+lags, two sounds sharing a channel, and one sound running into another with no silence
+between them. The cart was right every time; the readings were not.*
+
+---
 
 ## Extending these rules
 

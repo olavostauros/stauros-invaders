@@ -17,6 +17,11 @@ The milestone's worst case has to be on screen while it measures, so --hold writ
 gamepad mask to RAM every frame, the same way tools/inputsim.py does. Both samples hold
 the same mask, so the per-frame load is identical and the differential stays valid.
 
+Each sample also reports the load it was measured under - the state and invader count it
+ended on, and over the whole sample how many frames had the saucer up, the most bursts and
+the most channels sounding at once, and how many frames had any sound at all. A sample that
+ends in GAME_OVER measured a still picture.
+
 --hold only reaches a worst case made of things a button controls. An entity that
 arrives on a timer - the saucer, which comes 15 to 25 seconds in - can miss both samples
 entirely, so --samples moves the window to where it is on screen. Say in the report which
@@ -79,18 +84,22 @@ def run(sample, hold):
     text = buf.decode(errors="replace")
     if elapsed is None:
         sys.exit(f"no FPS line for sample={sample}; console output:\n{text[-2000:]}")
-    return re.search(r"FPS [\d.]+ over \d+ frames in [\d.]+ ms", text).group(0), elapsed
+    load = re.search(r"LOAD [^\n]*?soundingframes \d+", text)
+    return (re.search(r"FPS [\d.]+ over \d+ frames in [\d.]+ ms", text).group(0), elapsed,
+            load.group(0) if load else "LOAD unreported")
 
 
 def main():
     hold = int(sys.argv[sys.argv.index("--hold") + 1]) if "--hold" in sys.argv else 0
     short, long = samples()
-    line_s, host_s = run(short, hold)
-    line_l, host_l = run(long, hold)
+    line_s, host_s, load_s = run(short, hold)
+    line_l, host_l, load_l = run(long, hold)
 
     print(f"gamepad mask {hold} held throughout")
     print(f"sample {short:5d}: console {line_s}   host {host_s:.2f} s to the trace")
+    print(f"            {load_s}")
     print(f"sample {long:5d}: console {line_l}   host {host_l:.2f} s to the trace")
+    print(f"            {load_l}")
 
     frames, secs = long - short, host_l - host_s
     print(f"\ndifferential: {frames} extra frames in {secs:.2f} extra wall-clock "

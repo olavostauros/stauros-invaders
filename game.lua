@@ -32,6 +32,7 @@ local SPR_PLAYER_EXPLODE = 7
 -- The saucer is 16 px wide, so it is one composite spr() of two tiles rather than two
 -- calls. The sheet is 16 tiles to a row, so 9 and 10 sit side by side (docs/tic80-ram.md).
 local SPR_UFO = 9
+local SPR_EXPLOSION = 11
 
 -- A tile is 32 bytes of 4-bit pixels and poke4 addresses nibbles, so tile RAM at byte
 -- 0x4000 is nibble 0x8000 and each tile spans 64 nibbles in row-major order.
@@ -47,6 +48,16 @@ local PLAYER_MUZZLE_X = 3
 local PLAYER_LIVES = 3
 local PLAYER_DEAD_FRAMES = 90
 local PLAYER_EXPLODE_FRAMES = 8
+
+-- Long enough to read as a burst rather than a flicker, short enough to be gone before the
+-- next shot can reach the fleet. Four slots because at most one target dies in a frame and
+-- a burst outlives twelve of them, so the pool can never be the thing that drops one.
+local EXPLOSION_FRAMES = 12
+local EXPLOSION_MAX = 4
+-- A saucer's burst outlives an invader's, because what is left in its place is what it was
+-- worth: the score jumping by an unknown amount is otherwise the only word the player gets
+-- on which of the four bonuses they hit.
+local BONUS_FRAMES = 48
 
 local BULLET_W = 1
 local BULLET_H = 3
@@ -136,6 +147,9 @@ local UFO_W = SPRITE_W * UFO_TILES
 -- takes to climb to the lane. Anything slower needs a fractional accumulator, and nothing
 -- else in the file carries one.
 local UFO_SPEED = 1
+-- The saucer is two tiles wide and the burst is one, so it goes off in the middle of it
+-- rather than at its left edge.
+local UFO_EXPLODE_X = math.floor((UFO_W - SPRITE_W) / 2)
 local UFO_SPAWN_MIN = 900
 local UFO_SPAWN_MAX = 1500
 -- The arcade stopped sending the saucer once the wave was nearly cleared, so the last
@@ -350,6 +364,124 @@ local SPRITE_SHEET = {
       "........",
     },
   },
+  -- Yellow rather than the white of the invader it replaces, so a burst is one glance
+  -- apart from the fleet it went off in and from the red the ship dies in.
+  {
+    id = SPR_EXPLOSION,
+    color = C_YELLOW,
+    rows = {
+      "..#..#..",
+      "#.#..#.#",
+      ".#.##.#.",
+      "##.##.##",
+      ".#.##.#.",
+      "#.#..#.#",
+      "..#..#..",
+      "........",
+    },
+  },
+}
+
+-- Sound is written into RAM at boot for the same reason the sprite sheet is: the cart
+-- carries only a code chunk, so it ships no SFX bank and the console boots with an empty
+-- one. poke4 addresses nibbles and every field of a sample is one, so the byte addresses
+-- from the RAM map are doubled here.
+local SFX_BANK = {
+  waveforms = 0x0FFE4 * 2,
+  samples = 0x100E4 * 2,
+  -- 30 ticks of volume, wave, chord and pitch, then six bytes of settings and loop points.
+  sample = 66 * 2,
+  ticks = 30,
+  -- The top bit of the settings byte: it subtracts the chord instead of adding it, which
+  -- is the only way to bend a sound downwards.
+  reverse = 8,
+}
+
+-- One sound per channel, so a kill never cuts a shot off and the march never cuts either.
+local CHANNEL = { shoot = 0, explode = 1, march = 2, ufo = 3 }
+
+-- A waveform whose every point is the same 0 or 15 is read as noise rather than as a flat
+-- tone, which is where both explosions get their hiss.
+local WAVE = { square = 0, noise = 1 }
+
+-- Also what a silent tick stores: the bank keeps 15 minus the level a tick plays at.
+local SFX_VOLUME = 15
+-- The id that stops a channel rather than starting one.
+local SFX_STOP = -1
+
+local WAVEFORMS = {
+  { id = WAVE.square, values = "FFFFFFFFFFFFFFFF0000000000000000" },
+  { id = WAVE.noise, values = "00000000000000000000000000000000" },
+}
+
+-- One hex digit per tick, loudest first, sixty ticks a second; a tick past the end of the
+-- string is silence, which is what ends a sound. chord is semitones off the note the call
+-- names, added or - with reverse - subtracted, so the envelope and the sweep are the same
+-- length. notes is indexed by the caller: a sound with one note is played from one place,
+-- and the march and the saucer cycle theirs.
+--
+-- One table rather than five constants of their own: they are one bank written by one
+-- loop, and the main chunk is close enough to Lua's 200-local ceiling that a verification
+-- probe appended to it has to fit too (LINT-RULES.md L063).
+local SFX = {
+  shoot = {
+    id = 0,
+    channel = CHANNEL.shoot,
+    wave = WAVE.square,
+    notes = { 48 },
+    speed = 0,
+    volume = "FEDCBA9876543",
+    chord = "0123456789ABC",
+    reverse = false,
+  },
+
+  invader = {
+    id = 1,
+    channel = CHANNEL.explode,
+    wave = WAVE.noise,
+    notes = { 60 },
+    speed = 0,
+    volume = "FFDCA8654321",
+    chord = "001234567899",
+    reverse = true,
+  },
+
+  -- A tick stretched over two frames, so nineteen of them cover thirty-eight frames of the
+  -- death pause rather than nineteen, and two octaves below the invader's burst so the two
+  -- read apart even though both are noise.
+  player = {
+    id = 2,
+    channel = CHANNEL.explode,
+    wave = WAVE.noise,
+    notes = { 36 },
+    speed = -1,
+    volume = "8ACFFFEDCBA98765432",
+    chord = "0011223344556677889",
+    reverse = true,
+  },
+
+  -- The four descending notes of the arcade's march, one per fleet step. The tempo is the
+  -- step interval itself rather than a loop with a clock of its own, so it tightens exactly
+  -- as the fleet does and cannot drift out of step with it.
+  march = {
+    id = 3,
+    channel = CHANNEL.march,
+    wave = WAVE.square,
+    notes = { 36, 34, 32, 30 },
+    speed = 0,
+    volume = "FFEC9631",
+  },
+
+  -- Retriggered on alternating notes for as long as the saucer is up, which is the warble.
+  -- The two are a fifth apart so it reads as a siren rather than as a stutter.
+  ufo = {
+    id = 4,
+    channel = CHANNEL.ufo,
+    wave = WAVE.square,
+    notes = { 55, 50 },
+    speed = 0,
+    volume = "AAAAAAAA",
+  },
 }
 
 -- state
@@ -383,6 +515,9 @@ game = {
   -- cells is a plain boolean grid indexed [row][col], as fleet.alive is: a table per cell
   -- would buy nothing, and there are 352 of them.
   bunkers = {},
+  -- A fixed pool filled in BOOT(), as the shells are. timer is the liveness: a spent slot
+  -- keeps its last coordinates and its last bonus, and neither is to be read.
+  explosions = {},
   -- x, y locate row 1 column 1; the fleet is rigid, so every invader's position derives
   -- from that origin. alive is indexed [row][col] and filled in BOOT(); count is what the
   -- step interval reads, so it is kept rather than recounted every frame.
@@ -393,6 +528,9 @@ game = {
     timer = 0,
     frame = 0,
     fire_timer = 0,
+    -- Which of the march's four notes the next step sounds. It belongs to the fleet rather
+    -- than to the sound because it has to survive a wave and reset with one.
+    note = 0,
     count = FLEET_COUNT,
     alive = {},
   },
@@ -401,7 +539,11 @@ game = {
   -- the left. bonus belongs to the saucer rather than to the shot, so it is rolled when it
   -- enters and read when it dies. The lane never moves, so there is no y for UFO_Y to
   -- drift away from. timer counts down and holds the interval it was rolled with.
-  ufo = { x = 0, dir = -1, timer = 0, bonus = 0, active = false },
+  -- note and sound_timer are the warble: the saucer retriggers its own sound on
+  -- alternating notes for as long as it is up, so the siren stops when it is not updated
+  -- and needs no clock outside the crossing.
+  ufo = { x = 0, dir = -1, timer = 0, bonus = 0, note = 0, sound_timer = 0,
+          active = false },
 }
 
 -- helpers
@@ -423,6 +565,54 @@ local function blit_sprite_sheet()
       end
     end
   end
+end
+
+local function blit_sound()
+  for _, wave in ipairs(WAVEFORMS) do
+    local base = SFX_BANK.waveforms + wave.id * #wave.values
+    for point = 1, #wave.values do
+      poke4(base + point - 1, tonumber(wave.values:sub(point, point), 16))
+    end
+  end
+  -- pairs rather than ipairs because the bank is keyed by name: every sound carries the
+  -- id it is written to, so the order they come back in cannot matter.
+  for _, sound in pairs(SFX) do
+    local base = SFX_BANK.samples + sound.id * SFX_BANK.sample
+    for tick = 1, SFX_BANK.ticks do
+      local nibble = base + (tick - 1) * 4
+      local level = tonumber(sound.volume:sub(tick, tick), 16) or 0
+      poke4(nibble, SFX_VOLUME - level)
+      poke4(nibble + 1, sound.wave)
+      poke4(nibble + 2, sound.chord and tonumber(sound.chord:sub(tick, tick), 16) or 0)
+      poke4(nibble + 3, 0)
+    end
+    -- The note, the octave, the speed and the four loop points are all supplied by the
+    -- sfx() call or unused, so the settings are zeroed rather than left to whatever the
+    -- console booted with.
+    local settings = base + SFX_BANK.ticks * 4
+    for nibble = settings, base + SFX_BANK.sample - 1 do
+      poke4(nibble, 0)
+    end
+    if sound.reverse then poke4(settings + 1, SFX_BANK.reverse) end
+  end
+end
+
+-- Length in frames. Only speeds at or below zero are used, where one tick is stretched
+-- over 1 - speed frames; a positive speed divides instead and nothing here wants that.
+local function sfx_frames(sound)
+  return #sound.volume * (1 - sound.speed)
+end
+
+local function play_sfx(sound, index)
+  sfx(sound.id, sound.notes[index or 1], sfx_frames(sound), sound.channel, SFX_VOLUME,
+      sound.speed)
+end
+
+-- The note and the duration go with the stop id because sfx() takes them positionally and
+-- there is no way to name only the channel; -1 is what the wiki gives for both defaults,
+-- and both are ignored on a stop.
+local function stop_sfx(channel)
+  sfx(SFX_STOP, SFX_STOP, SFX_STOP, channel, SFX_VOLUME, 0)
 end
 
 local function build_fleet()
@@ -464,6 +654,7 @@ local function reset_fleet()
   fleet.timer = 0
   fleet.frame = 0
   fleet.fire_timer = 0
+  fleet.note = 0
 end
 
 local function build_bunkers()
@@ -500,11 +691,26 @@ local function reset_ufo()
   local ufo = game.ufo
   ufo.active = false
   ufo.timer = math.random(UFO_SPAWN_MIN, UFO_SPAWN_MAX)
+  -- Both ways a saucer leaves come through here, so the siren is cut in one place rather
+  -- than at each of them, and a note still sounding when it dies goes with it.
+  stop_sfx(CHANNEL.ufo)
 end
 
 local function build_enemy_bullets()
   for slot = 1, ENEMY_BULLET_MAX do
     game.enemy_bullets[slot] = { x = 0, y = 0, active = false }
+  end
+end
+
+local function build_explosions()
+  for slot = 1, EXPLOSION_MAX do
+    game.explosions[slot] = { x = 0, y = 0, bonus = 0, timer = 0 }
+  end
+end
+
+local function clear_explosions()
+  for _, burst in ipairs(game.explosions) do
+    burst.timer = 0
   end
 end
 
@@ -523,6 +729,7 @@ local function reset_wave()
   reset_bunkers()
   reset_ufo()
   clear_bullets()
+  clear_explosions()
   game.player.x = PLAYER_START_X
 end
 
@@ -556,6 +763,7 @@ local function fire()
   bullet.x = game.player.x + PLAYER_MUZZLE_X
   bullet.y = PLAYER_Y - BULLET_H
   bullet.active = true
+  play_sfx(SFX.shoot)
 end
 
 local function update_player()
@@ -582,6 +790,24 @@ local function update_enemy_bullets()
       bullet.y = bullet.y + ENEMY_BULLET_SPEED
       if bullet.y >= SCREEN_H then bullet.active = false end
     end
+  end
+end
+
+local function spawn_explosion(x, y, bonus)
+  for _, burst in ipairs(game.explosions) do
+    if burst.timer == 0 then
+      burst.x = x
+      burst.y = y
+      burst.bonus = bonus
+      burst.timer = bonus > 0 and BONUS_FRAMES or EXPLOSION_FRAMES
+      return
+    end
+  end
+end
+
+local function update_explosions()
+  for _, burst in ipairs(game.explosions) do
+    if burst.timer > 0 then burst.timer = burst.timer - 1 end
   end
 end
 
@@ -645,6 +871,8 @@ end
 local function step_fleet()
   local fleet = game.fleet
   fleet.frame = 1 - fleet.frame
+  fleet.note = fleet.note % #SFX.march.notes + 1
+  play_sfx(SFX.march, fleet.note)
   local left, right = live_columns()
   local next_x = fleet.x + fleet.dir * FLEET_STEP_X
   local next_left = next_x + (left - 1) * FLEET_COL_SPACING
@@ -687,6 +915,8 @@ local function spawn_ufo()
   ufo.dir = -ufo.dir
   if ufo.dir > 0 then ufo.x = -UFO_W else ufo.x = SCREEN_W end
   ufo.bonus = UFO_POINTS[math.random(#UFO_POINTS)]
+  ufo.note = 0
+  ufo.sound_timer = 0
   ufo.active = true
 end
 
@@ -694,7 +924,18 @@ local function update_ufo()
   local ufo = game.ufo
   if ufo.active then
     ufo.x = ufo.x + ufo.dir * UFO_SPEED
-    if ufo.x >= SCREEN_W or ufo.x + UFO_W <= 0 then reset_ufo() end
+    if ufo.x >= SCREEN_W or ufo.x + UFO_W <= 0 then
+      reset_ufo()
+      return
+    end
+    -- Retriggered as one note runs out rather than on a clock of its own, so the siren is
+    -- continuous and stops the moment the saucer stops being updated.
+    ufo.sound_timer = ufo.sound_timer - 1
+    if ufo.sound_timer <= 0 then
+      ufo.note = ufo.note % #SFX.ufo.notes + 1
+      ufo.sound_timer = sfx_frames(SFX.ufo)
+      play_sfx(SFX.ufo, ufo.note)
+    end
     return
   end
   -- The wait does not run down while the fleet is too thin to earn a saucer, so refilling
@@ -784,6 +1025,25 @@ local function draw_fleet()
     for col = 1, FLEET_COLS do
       if fleet.alive[row][col] then
         spr(id, fleet.x + (col - 1) * FLEET_COL_SPACING, y, C_BLACK, 1, 0, 0, 1, 1)
+      end
+    end
+  end
+end
+
+-- A burst worth something shows the sprite for as long as any other and then stands its
+-- value in the space the saucer was crossing, which is empty sky by the time it is read.
+local function draw_explosions()
+  for _, burst in ipairs(game.explosions) do
+    if burst.timer > 0 then
+      if burst.bonus > 0 and burst.timer <= BONUS_FRAMES - EXPLOSION_FRAMES then
+        local text = string.format("%d", burst.bonus)
+        local width = #text * FONT_W
+        -- Clamped because a saucer can be shot at either end of its crossing, where a
+        -- number three times its width centred on it would hang off the screen.
+        local x = clamp(burst.x + math.floor((SPRITE_W - width) / 2), 0, SCREEN_W - width)
+        print_fixed(text, x, burst.y, C_RED, 1)
+      else
+        spr(SPR_EXPLOSION, burst.x, burst.y, C_BLACK, 1, 0, 0, 1, 1)
       end
     end
   end
@@ -914,6 +1174,9 @@ local function collide_bullet_fleet()
         fleet.alive[row][col] = false
         fleet.count = fleet.count - 1
         add_score(FLEET_ROW_POINTS[row])
+        spawn_explosion(fleet.x + (col - 1) * FLEET_COL_SPACING,
+                        fleet.y + (row - 1) * FLEET_ROW_SPACING, 0)
+        play_sfx(SFX.invader)
         bullet.active = false
         return
       end
@@ -931,6 +1194,8 @@ local function collide_bullet_ufo()
   if bullet.x < ufo.x + UFO_W and bullet.x + BULLET_W > ufo.x and
      bullet.y < UFO_Y + SPRITE_H and bullet.y + BULLET_H > UFO_Y then
     add_score(ufo.bonus)
+    spawn_explosion(ufo.x + UFO_EXPLODE_X, UFO_Y, ufo.bonus)
+    play_sfx(SFX.invader)
     bullet.active = false
     reset_ufo()
   end
@@ -976,9 +1241,13 @@ local function kill_player()
   game.lives = game.lives - 1
   game.death_timer = PLAYER_DEAD_FRAMES
   game.state = STATE.PLAYER_DEAD
+  play_sfx(SFX.player)
   -- Shells already in the air would otherwise be waiting on the respawned ship, and the
   -- player's own shot belongs to the life that just ended.
   clear_bullets()
+  -- A burst left hanging would be the one thing still moving through a pause that freezes
+  -- everything else, and it belongs to the life that just ended.
+  clear_explosions()
   game.fleet.fire_timer = 0
 end
 
@@ -989,6 +1258,7 @@ local function state_playing()
   update_fleet()
   enemy_fire()
   update_ufo()
+  update_explosions()
   -- The shields are read before the fleet: an invader low enough to share a pixel with a
   -- bunker cell has already crushed it, so this never steals a kill.
   collide_bullet_bunkers()
@@ -1002,6 +1272,7 @@ local function state_playing()
   draw_enemy_bullets()
   draw_fleet()
   draw_ufo()
+  draw_explosions()
   draw_hud()
   -- Landing is read first so it wins on a frame that is also a hit: it ends the game
   -- whatever the life count says. The wave is read last for the mirror of that reason: a
@@ -1072,6 +1343,7 @@ local function state_game_over()
   draw_enemy_bullets()
   draw_fleet()
   draw_ufo()
+  draw_explosions()
   draw_hud()
   print_centered("GAME OVER", BANNER_Y, C_RED, BANNER_SCALE)
   print_centered("PRESS A", BANNER_PROMPT_Y, C_YELLOW, 1)
@@ -1099,9 +1371,11 @@ end
 
 function BOOT()
   blit_sprite_sheet()
+  blit_sound()
   build_fleet()
   build_enemy_bullets()
   build_bunkers()
+  build_explosions()
   game.hi = pmem(HI_SCORE_SLOT)
   reset_game()
 end

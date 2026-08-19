@@ -23,6 +23,8 @@ Usage:
     python3 tools/screendump.py --hold 16 --frames 20 # dump frame 20 with A held
     python3 tools/screendump.py --state PLAYER_DEAD   # dump the first frame of a death
     python3 tools/screendump.py --ufo --lives 3       # dump a frame with the saucer up
+    python3 tools/screendump.py --hold 16 --boom      # dump a frame with a burst alight
+    python3 tools/screendump.py --hold 20 --lives 3 --bonus  # a saucer's bonus, once one is hit
     python3 tools/screendump.py --state WAVE_CLEAR --clear 60   # the wave banner
 
 --state GAME_OVER wants the default --hold 0: a held fire button leaves a game over on the
@@ -48,7 +50,7 @@ def word(name, default):
     return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
 
 
-def capture(hold, frames, state, ufo, lives, clear):
+def capture(hold, frames, state, ufo, lives, clear, boom, bonus):
     """Run the probe cart headlessly and return the raw console output."""
     os.makedirs(os.path.join(ROOT, "scratch"), exist_ok=True)
     probe = open(os.path.join(ROOT, "tools", "vram-probe.lua"), encoding="utf-8").read()
@@ -58,6 +60,8 @@ def capture(hold, frames, state, ufo, lives, clear):
     probe = re.sub(r"local PROBE_UFO = 0", f"local PROBE_UFO = {ufo}", probe)
     probe = re.sub(r"local PROBE_LIVES = 0", f"local PROBE_LIVES = {lives}", probe)
     probe = re.sub(r"local PROBE_CLEAR = 0", f"local PROBE_CLEAR = {clear}", probe)
+    probe = re.sub(r"local PROBE_BOOM = 0", f"local PROBE_BOOM = {boom}", probe)
+    probe = re.sub(r"local PROBE_BONUS = 0", f"local PROBE_BONUS = {bonus}", probe)
     src = os.path.join(ROOT, "scratch", "probe.lua")
     with open(src, "w", encoding="utf-8") as f:
         f.write(open(os.path.join(ROOT, "game.lua"), encoding="utf-8").read())
@@ -73,7 +77,7 @@ def capture(hold, frames, state, ufo, lives, clear):
     buf = b""
     t0 = time.monotonic()
     try:
-        while time.monotonic() - t0 < 60:
+        while time.monotonic() - t0 < 300:
             chunk = proc.stdout.read(4096)
             if not chunk:
                 break
@@ -125,12 +129,16 @@ def main():
     hold, frames, state = arg("--hold", 0), arg("--frames", 2), word("--state", "")
     ufo, lives = 1 if "--ufo" in sys.argv else 0, arg("--lives", 0)
     clear = arg("--clear", 0)
+    boom = 1 if "--boom" in sys.argv else 0
+    bonus = 1 if "--bonus" in sys.argv else 0
     print(f"gamepad mask {hold} held, dumping frame {frames}"
           + (f" or the first one in {state} after it" if state else "")
           + (" or the first one with the saucer wholly on screen" if ufo else "")
           + (f", life count held at {lives}" if lives else "")
-          + (f", fleet emptied on frame {clear}" if clear else "") + "\n")
-    rows = parse(capture(hold, frames, state, ufo, lives, clear))
+          + (f", fleet emptied on frame {clear}" if clear else "")
+          + (" or the first one with an explosion alight" if boom else "")
+          + (" or the first one showing a saucer's bonus" if bonus else "") + "\n")
+    rows = parse(capture(hold, frames, state, ufo, lives, clear, boom, bonus))
     if "--raw" in sys.argv:
         path = sys.argv[sys.argv.index("--raw") + 1]
         with open(path, "w", encoding="utf-8") as f:

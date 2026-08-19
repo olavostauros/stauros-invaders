@@ -24,43 +24,38 @@ Legend: `TODO` · `IN PROGRESS` · `DONE` (verified in-console) · `BLOCKED`
 | M5 | Bunkers — cell-grid erosion, per-wave reset | DONE | Verified 2026-08-17 with `tools/inputsim.py`, five new scenarios: four shields of 74 cells stand at x 19/79/139/199, y 100..115, and nothing erodes one nobody shot at; a shot into bunker 2's arch notch stops inside the band, skips the two dead rows below it and blasts the plus around the *lowest* live cell of its column, leaving the other three shields untouched; ten shots into the same spot drilled a channel — 74 → 70 → 66 → 62 cells, each impact 4 px higher than the last, the fourth flying clean through on frame 250 with 62 of 74 cells still standing, which is "blocks bullets while cells remain" and its converse in one run; 2,500 frames of never firing had 32 shells absorbed for 93 cells, every one stopping between y 96 and 106 and every blast centred on the *highest* live cell of its column, the mirror of the player's erosion; and a fleet placed with its bottom row inside the band erased all 90 cells under it and exactly those — 212 left standing outside the footprint, nothing touched beyond it. Observed on screen via `tools/screendump.py`: four 22 px arches with their legs, 1,219 px of color 5 being exactly 35 of ship plus 4 × 74 × 4 of cell; and after 500 frames of sweeping fire, bunker 3 chewed to fragments and bunker 4's roof bitten open. 60.00 FPS console / 60.47 host differential with 296 cells drawn a frame, moving and firing. All 17 M1–M4 scenarios re-run and passing, and the full 22 ran clean three times end to end — 101 assertions, 0 failures — after two pre-existing RNG-deadline flakes were found and fixed (§3). Lint pass clean; L059 and L060 added. |
 | M6 | Mystery ship — spawn timing, traversal, bonus | DONE | Verified 2026-08-18 with `tools/inputsim.py`, six new scenarios: a saucer crosses the lane at y 10..17, entering at x -16 heading right — the first of a game always from the left — carrying one bonus for all 256 frames of the crossing with the wait held at 0 throughout; over an unforced 3,500 frames three intervals were rolled, 1243, 1210 and 999, every one inside the 900..1500 band, the count-down falling exactly one frame at a time and stopping with the game, and each saucer arriving on the frame its own count reached zero; eight complete crossings alternated sides strictly, entered a full 16 px off screen at both ends, moved only ±1 px a frame, ran 256 moving frames whichever side they came from, spanned x -16..239 and -15..240, left the screen rather than parking on it, and carried all four of 50/100/150/300; a ship parked at the left edge tapping fire for 8,996 frames saw 32 crossings and shot 7 down, each scoring exactly the bonus that saucer was carrying, none of them also thinning the fleet, the bullet spent every time and a fresh in-band interval rolled the moment it died; eight invaders left standing produced no saucer across 2,240 playing frames with the timer held at 1049 and never moving, while nine produced one; and of seven deaths, six began with a saucer up, which held its x, its bonus and its liveness across 540 frozen frames and resumed to a crossing still 256 moving frames long. Observed on screen via `tools/screendump.py`: 66 px of color 2 at x 0..15, y 10..16 — exactly the two tiles' lit pixels from `SPRITE_SHEET` — with the non-black bounding box's top moved from y 20 to y 10, beside 2,200 px of white that is the full 55-invader fleet in waddle frame 1 and 1,015 of green that is 35 of ship plus 245 bunker cells of 4; and during a death, 88 px of red being 66 of saucer plus 22 of explosion, with 568 of green accounting for 142 cells and no ship. 59.99 FPS host differential over frames 1,200..2,400, a window measured to hold a full crossing under the same held mask, console 59.998–60.001. All 22 M1–M5 scenarios re-run and passing, and the full 28 ran clean six times end to end — 148 assertions, 0 failures. Lint pass clean; L016, L052 and L059 amended. |
 | M7 | Shell — title, game over, wave transitions, HUD, `pmem`, extra life | DONE | Verified 2026-08-18 with `tools/inputsim.py`, six new scenarios: the cart boots on a title screen where the fleet, the score, the sky and the saucer's own wait all hold still through 90 frames — one step a playing fleet would have taken — and A starts a game on the frame it is pressed, 55 invaders at y 20 with 296 bunker cells and three lives; the full loop runs title → play → game over → title → play again in one trace, the landing ending a game that had scored 10, the game over holding everything frozen for 60 frames until A takes it back to the title, and the second game opening at score 0 with the high score of the first still on the HUD; a wave ends in exactly 120 frames of `WAVE_CLEAR` with the timer 120 down to 1 and nothing moving through it, and then arrives whole on one frame — wave 2, 55 invaders at y 26, 296 cells back from the 274 the last wave was won on, the ship recentred, the sky cleared, no saucer up and its wait rolled at 1485 inside the 900..1500 band; the second wave starts a drop lower, marches every 50 frames instead of 55 and fires every 23 instead of 25, each against the curve rather than against "faster"; a game that scored 3,220 was given one extra ship on the frame it reached 1,530 and kept it for 1,279 frames until it was shot down, with no second ship over the 8,332 frames it took the score to 3,220 and none at all in a second game that scored 1,370; and a console handed an empty `pmem` slot scored 10, ended, and a second console launched afterwards read 10 out of the slot on its first frame. Observed on screen via `tools/screendump.py`: the title at 968 px of green across x 24..213 with the HI line and the prompt below it and no entity anywhere; the HUD band inside y 0..6 — SCORE at x 2, HI at 96, LIVES at 160 and three ship sprites at 192, 200 and 208; "WAVE 2" over the held field with all four shields standing and the ship still where it was; and "GAME OVER" in red over a fleet that is still there either side of it, the banner having cleared its own box out of the invaders behind it. 59.998–60.000 FPS console / 60.36 host differential over frames 1,200..2,400 with the HUD's four `print` calls and three extra `spr` calls on top of M6's worst case. All 28 M1–M6 scenarios re-run and passing, and the full 34 ran clean four times end to end — 193 assertions, 0 failures — after three flakes of the suite's own making were found and fixed (§3). Lint pass clean; L008 automated, L010 amended, L061 and L062 added. |
-| M8 | Audio and polish — SFX, fleet loop, explosions, perf pass | TODO | |
+| M8 | Audio and polish — SFX, fleet loop, explosions, perf pass | DONE | Verified 2026-08-18 with `tools/inputsim.py`, five new scenarios reading the sound registers rather than the calls: three presses in 122 frames put two bullets in the air and two sounds on the shot channel, each a rising sweep from 262 to 494 Hz starting on the frame after its own shot, with the third press — made while the first bullet was still up — sounding nothing; a shot from the start position killed the row 5 column 6 invader on frame 25, left a burst in the cell it was standing in at (116, 60) for exactly 12 frames, held that cell while the fleet was moved to (60, 30) under it, and put one sound on the explosion channel on frame 26, falling from 523 to 311 Hz, which is the invader's death and not the ship's; a ship standing and firing under the fleet for 2,400 frames died 6 times, and the first death sounded on the frame after it was hit, falling from 131 to 78 Hz over 37 frames — a different note and twice the length of an invader's — with nothing else triggered and no burst left alight in any of the 540 frames spent dying, and the frozen ship unable to fire; a full fleet sounded one note per step and none without one, all four notes cycling 36, 34, 32, 30 in order at 131/117/104/92 Hz, one steady tone each, and the gap between them was 55 playing frames at 55 alive and 8 at 8 — the loop's tempo is the fleet's step interval and not a clock of its own; and a saucer sang 32 alternating notes at 392/294 Hz over the 256 playing frames of a crossing, silent before the first one arrived, silent within 8 frames of each of 7 crossings ending, and never retriggered in the 360 frames the ship spent dying. The saucer's bonus rode along in the M6 kill scenario: 7 saucers shot down, each leaving what it was worth standing in the lane at y 10 for its own 48 frames and no longer. Observed on screen via `tools/screendump.py`: the burst 26 px of yellow at x 116..123, y 60..66 — exactly the sheet's lit pixels in the dead invader's cell — beside a 1 × 3 yellow shell, with 1,324 px of green being 296 bunker cells, the ship and the three HUD lives; and "150" in red at x 2..17, y 10..14 where a saucer had just been shot at the left end of its crossing. 59.999–60.000 FPS console / 60.04 host differential over frames 1,200..2,400, a window the probe reports carried 440 frames of saucer, a peak of 4 channels sounding at once and 1,015 frames with sound in them. All 34 M1–M7 scenarios re-run and passing, and the full 39 ran clean three times end to end — 236 assertions, 0 failures — after three flakes of the suite's own making were found and fixed (§3). Lint pass clean; L063, L064 and L065 added. |
 
-**Current position:** M7 complete and verified in-console. The game is a game: it opens on
-a title screen, plays waves that start lower and press harder than the one before, pauses
-between them, gives a ship at 1,500 points, ends when the lives or the sky run out, and
-goes back to the title with a high score that outlives the console. M8 — audio and polish —
-is all that is left, and it is the first milestone that needs the SFX editor rather than
-the framebuffer.
+**Current position:** M8 complete and verified in-console. Every milestone in `MISSION.md`
+§8 is closed: the cart opens on a title screen, plays waves that march to a four-note loop
+whose tempo is the fleet's own step interval, shoots, explodes and dies out loud, shows what
+a saucer was worth where it died, and holds 60 FPS with a full wave, a saucer and four
+channels sounding at once.
 
-`MISSION.md` §8's acceptance for M7 was "the full loop title → play → game over → title
-runs without a restart", and `scenario_full_loop` is that sentence: one trace, four
-transitions, all four of them a button press.
+**The SFX editor could not be used, so the bank is written from code.** `MISSION.md` §6 asks
+for sounds built in TIC-80's SFX editor and triggered by id, and neither half of that is
+available here: `pack.py` writes a code chunk and nothing else, so the cart ships no SFX
+bank, and no tool in this environment can drive the editor's GUI. `blit_sound()` writes the
+waveforms and the five samples into RAM in `BOOT()`, exactly as `blit_sprite_sheet()` has
+written the tile sheet since M1, and every sound is then triggered by id through `sfx()`.
+What §6 rules out — poking the sound registers per frame to synthesise audio — is not what
+this does: the registers are only ever read, and only by the probes.
 
-The prediction M6 left about the `_ENV` list finally broke, after five milestones of being
-wrong the other way. It gained three names at once — `pmem`, `print` and `string` — because
-M7 is the first milestone that draws text and the first that writes anything down. `string`
-is the interesting one: `s:sub()` has been used since M0 without ever putting the table in
-`_ENV`, because a method call on a string goes through the metatable; `string.format` is
-what put it there.
+**Nothing here can hear the console, so the sound registers are the audio framebuffer.**
+`0x0FF9C` holds a frequency and a volume per channel, rewritten every frame and zeroed when
+a channel goes quiet, which makes "a sound fired" as readable as "a pixel is lit" — and
+makes it possible to say *which* sound, on which note, for how long. L065 is the rule.
+What it cannot say is whether any of it sounds good; that is the open question below, and
+it is the first acceptance criterion in this project that no tool here can close.
 
-**Both undriven resets are now driven, and the open question they left is closed.**
-`reset_bunkers()` and `reset_ufo()` are called from `reset_wave()`, which the transition
-runs when its pause ends, and `scenario_wave_transition` asserts both: 296 cells back from
-the 274 the wave was won on, and no saucer up with a fresh in-band interval on the first
-frame of wave 2. `reset_fleet()` joined them, split out of `build_fleet()` for the same
-L009 reason.
-
-Two things M8 inherits. **The harness now has to say which game it is measuring** — a game
-over is no longer where a run stops, because fire takes it back to the title and the next
-press starts another. `games()` and `first_game()` are that slice, L061 is the rule, and
-any new scenario that reads a score climbing or a fleet thinning has to use them. And
-**`PROBE_ENDLESS` is a forcing that suppresses the game rather than reaching it** (L062):
-nine pre-M7 scenarios clear the fleet only to get it out of the way, and an empty sky is no
-longer a state the game can be left in. It is sound only because entering `WAVE_CLEAR` sets
-a state and a timer and nothing else. If M8 hangs a sound or an animation off that
-transition, the forcing has to grow with it or those nine scenarios will quietly start
-measuring something else.
+Two things M8 inherited and both bit within an hour of each other, which is why both are now
+rules. **The cart and its probes share one 200-local budget** (L063): M8 took `game.lua`
+from 159 top-level locals to 184 and the next scenario run would not load at all, pointing
+at a line in a probe that had been fine for seven milestones. **And they share one 64 KB
+chunk with the script table** (L064): 9 KB of new code was enough to stop
+`scenario_ufo_freezes_on_death` — an M6 scenario, untouched — from packing at all. Scripts
+are now folded to their repeating cycle, which also stopped `mask_at()` rescanning the whole
+script on every frame of it.
 
 ---
 
@@ -134,6 +129,17 @@ Verified 2026-08-18, fifth pass — persistence and cart size:
 | Cart size | 32,696 bytes, **49.9% of one bank**. The 64 KB cap is not close, but `scratch/input.lua` is: `tools/inputsim.py` appends its script table to the cart, and a run of 4,320 segments overflowed at 68,507 bytes. Long scenarios buy frames per segment, not segments |
 | Font metrics | Measured in-console rather than recalled: every glyph of the default font occupies a **6 px cell, six rows tall**, `fixed` or not, and the small font is 4 px. Recorded under `print` in `docs/tic80-api.md`; `FONT_W` in `game.lua` is that measurement |
 
+Verified 2026-08-18, sixth pass — audio, and the two budgets M8 found:
+
+| Check | State |
+|---|---|
+| Sound at all | Works headless. The console runs its sound tick under `--cli` with no audio device, so the **sound registers at `0x0FF9C` are readable and correct without anything being audible** — which is the only reason M8's acceptance could be measured here at all. `docs/tic80-ram.md` has the layout |
+| SFX bank | Empty at boot, because `pack.py` writes a code chunk and nothing else. `game.lua` writes 2 waveforms and 5 samples into RAM in `BOOT()` (§3). Confirmed by `scratch/sfxtest.lua`: a sample poked into the bank and played put the expected note and envelope on the register |
+| The SFX editor | Unreachable. It is a GUI, and nothing here can drive one — the same wall as the keyboard. Not a blocker; see §3 |
+| Locals | **The cart and its probes share Lua's 200-local budget**, because a probe is concatenated onto `game.lua` (L053) and the main chunk is one function. `game.lua` is at 180 with a 185 ceiling (`LINT-RULES.md` L063); the probes now scope their own inside a function |
+| Cart size | 42,915 bytes, **65.5% of one bank**, up from 32,696 at M7. The probe cart adds ~10 KB of probe on top, so a scenario's script table has about 12 KB to live in — which is why scripts are folded to their repeating cycle rather than listed frame by frame (L064) |
+| Frame rate under load | 60.001 console / 60.04 host differential over frames 1,200..2,400 with a full-ish fleet, 236 frames of saucer, up to 4 channels sounding at once and 1,019 frames carrying sound. `tools/fpscheck.py` now reports that load beside the number |
+
 Syntax-only fallback, which is **not** a test — label results *syntax verified,
 behavior unverified* (`AGENTS.md` §3). Note it checks 5.4 against a 5.3 console:
 
@@ -147,6 +153,100 @@ luac5.4 -p game.lua
 
 Newest first. Record the *why*, not just the *what*.
 
+- **2026-08-18 — the SFX bank is written into RAM at boot, because the editor is not
+  reachable and the cart carries no bank.** `MISSION.md` §6 says to build sounds in the SFX
+  editor and warns against synthesising audio by poking sound registers. The editor is a
+  GUI no tool here can drive, and `pack.py` writes a `CHUNK_CODE` chunk and nothing else, so
+  a cart built from this repo has 64 empty samples whatever the editor was used for. Writing
+  the bank from a table in `BOOT()` is the same arrangement the sprite sheet has had since
+  M1 and keeps `game.lua` the whole deliverable: the sounds ship with the code rather than
+  in a binary nobody can diff. It is also not what §6 forbids — `sfx()` still triggers by
+  id, and no register is ever written.
+- **2026-08-18 — one channel per kind of sound, four kinds.** Shot, explosion, march and
+  saucer each own a channel, so a kill cannot cut off a shot and the march cannot cut off
+  either. TIC-80 gives exactly four, which is exactly enough, and it means a scenario can
+  say which sound fired by reading one channel rather than by disentangling a mix.
+- **2026-08-18 — the march is one sound per fleet step, not a loop with a clock.**
+  `MISSION.md` §6 asks for a four-note loop "whose tempo tracks the fleet's step interval".
+  A loop with its own timer would have to be kept in sync with the march; a note played by
+  `step_fleet()` *is* the march, and the tempo cannot drift because there is nothing to
+  drift from. It also made the acceptance criterion measurable in one line: one note per
+  step, none without one, at 55 playing frames apart with 55 alive and 8 with 8.
+- **2026-08-18 — the saucer's siren is retriggered rather than looped.** The sample loops in
+  the bank could have held a note indefinitely, but then stopping it would depend on the
+  despawn path being reached and nothing else; retriggering an 8-frame note from
+  `update_ufo()` means the siren is exactly as alive as the saucer's own update. It stops in
+  a death pause because the pause does not update the saucer, and it stops for good in
+  `reset_ufo()`, which is where both ways out of the lane already met.
+- **2026-08-18 — an explosion is a pool slot with a timer, and the burst stays where the
+  target died.** Four slots, because at most one target can die in a frame and a burst
+  outlives twelve of them. The burst does not follow the fleet: it marks the cell the
+  invader was standing in, which is what a player who fired at that cell is looking at.
+  Bursts are cleared by `kill_player()` for the same reason the shells are — a burst still
+  counting down would be the one thing moving through a pause that freezes everything else.
+- **2026-08-18 — a saucer's burst shows what it was worth, and that is the milestone's
+  juice.** The arcade put the bonus where the saucer died; without it the only feedback is
+  the score jumping by a number the player cannot attribute, which matters here because the
+  bonus is a uniform draw from four values (§6, open). The number replaces the burst for the
+  last 36 of its 48 frames and is clamped to the screen, because a saucer can be shot at
+  either end of its crossing. **What was deliberately not built is screen shake or a flash**:
+  both would move or recolour the framebuffer that every visual check in this project reads,
+  and the acceptance criteria of five earlier milestones are written against those pixels.
+  Juice that breaks the instrument is not a good trade.
+- **2026-08-18 — the sound registers are read, never written, and that is the whole audio
+  test.** Nothing here can listen to the console, and a clean run says even less about audio
+  than it does about pixels. `0x0FF9C` gives a frequency and a volume per channel per frame,
+  which is enough to say which sound fired, on which note, for how long, and that it
+  stopped. Two lags had to be measured before any of it read correctly: the register catches
+  up the frame after the `sfx()` call, and `game.lua` changes state at the end of a frame, so
+  an event's state is the one traced two frames back. Both of M8's first two audio failures
+  were one of those lags rather than the cart. L065.
+- **2026-08-18 — the eight notes the game plays were measured, not derived.** The console's
+  note-frequency table is not readable from a cart, and `tools/inputsim.py` needs it to say
+  *which* note a sound started on. `scratch/notes.lua` played each of the eight through a
+  known sample and read the frequency back off the register: 30 → 92 Hz, 32 → 104, 34 → 117,
+  36 → 131, 48 → 262, 50 → 294, 55 → 392, 60 → 523. Four of them had also been read out of
+  the console's source, which is what makes the other four trustworthy rather than a guess.
+- **2026-08-18 — the sample layout came from the console's source, because the wiki is
+  ambiguous about it.** `AGENTS.md` §4.2 puts the source third, behind the wiki, and this is
+  the first time the wiki was not enough: its `.tic` File Format page describes a sample as
+  "60 bytes of volume and waveform pairs … 60 ticks", and a sample is 30 ticks of four
+  nibbles. `tic_sample` in `src/tic.h` settles it, and `sound.c` supplies two facts no page
+  states: the stored volume is **15 minus** the level played, and a waveform whose points
+  are all 0 or all 15 is read as **noise** rather than as a flat tone — which is where both
+  explosions get their hiss, and why an unwritten waveform is not silence. Both were then
+  confirmed in-console in `scratch/` before a line went into `game.lua`.
+- **2026-08-18 — the five sounds are one `SFX` table, and the probes were moved into a
+  function, because the cart and its probes share 200 locals.** Neither change is
+  cosmetic: the first scenario run after M8's constants went in failed to load with
+  `too many local variables (limit is 200) in main function`, pointing at the probe.
+  Grouping the sounds by name bought five locals back and reads better at the call sites
+  (`play_sfx(SFX.march, fleet.note)`); wrapping each probe body in `local function probe()`
+  bought thirty and costs one. L063 is the rule, with a ceiling of 185 so the next probe has
+  somewhere to live.
+- **2026-08-18 — three flakes of the suite's own making, all three about what a channel
+  is.** None was in the cart, and repeat runs found them one at a time. First,
+  `scenario_invader_death` asserted *one* sound on the explosion channel and got two, on
+  frames 26 and 51: the kill, and the ship being shot 25 frames later, which is about when
+  the first shell of a game reaches a ship standing where this one stands. A channel carries
+  two of the game's sounds, and a scenario that names a count instead of a sound cannot tell
+  them apart — it now asserts what each voice *is* (L060). Second, and the interesting one:
+  **a sound retriggered on a channel that has not fallen silent leaves no gap in the
+  register**, so a kill eleven frames before a death runs into it as one unbroken run and
+  no voice *starts* on the frame the death sounded on. Reading a run of nonzero volume as
+  one sound is right; assuming every sound therefore begins one is not. `voice_at()` slices
+  from a frame a trigger is known to have happened on. Third, a march gap of 7 playing
+  frames where every other was 8 — the frame that both stepped the fleet and lost the ship
+  traces `PLAYER_DEAD` while having marched, because the state on a frame is the one it
+  *ended* in. `began_playing()` is the fleet timer's actual clock. That last one is the
+  sixth fixed-deadline flake in the suite's history and the fifth whose fix was the right
+  clock rather than a longer deadline (§3, M5 and M7).
+- **2026-08-18 — a scenario's script now ships as a cycle and a count.** The probe cart is
+  `game.lua`, the probe and the script table in one 64 KB chunk, and M8's 9 KB of code was
+  enough to stop an untouched M6 scenario from packing. `fold()` reduces
+  `[(1, LEFT), (1, RIGHT)] * 1400` to two entries and a repeat count, which is what those
+  scenarios always meant. PROGRESS had recorded the underlying limit since M7 without it
+  being applied — the kind of fact that gets rediscovered as a failure. L064.
 - **2026-08-18 — `add_score()` is the only writer of `game.score`, and that is what makes
   the extra life possible at all.** M6 left a note that the score had acquired a second
   writer; M7 would have given it a third and a fourth (the HUD reads it, `pmem` saves it,
@@ -730,6 +830,21 @@ recorded in `docs/tic80-api.md` **before its first use**.
   measured rather than only read: the "left-to-right from `id`" claim was confirmed on the
   framebuffer, and the two tiles land horizontally adjacent with nothing bleeding into the
   row below.
+- M8 added the first new TIC-80 call since M1, and three names in all: **`sfx`** is
+  recorded in `docs/tic80-api.md` with its six positional arguments, the -1 stop id, and two
+  behaviours measured rather than read — the register catches up the frame after the call,
+  and a tick whose stored volume is 15 silences the channel whatever `duration` says.
+  **`pairs`** and **`tonumber`** are Lua stdlib and are recorded in `docs/lua-notes.md`; both
+  arrive with the sound bank, which is keyed by name and reads its envelopes as hex digits.
+  The L011 `_ENV` list is now `BOOT`, `TIC`, `btn`, `btnp`, `cls`, `game`, `ipairs`, `math`,
+  `pairs`, `pmem`, `poke4`, `print`, `rect`, `sfx`, `spr`, `string`, `tonumber`.
+- `docs/tic80-ram.md` gained the three audio regions M8 touches: `WAVEFORMS` at `0x0FFE4`,
+  `SFX` at `0x100E4` with the full nibble layout of a 66-byte sample, and `SOUND REGISTERS`
+  at `0x0FF9C` with the note frequencies measured off it. The sample layout is the first
+  fact in this project that the wiki could not settle (§3) — it came from `tic_sample` in
+  the console's own `src/tic.h`, per `AGENTS.md` §4.2's third source, and was then confirmed
+  in-console before use. `MUSIC PATTERNS` and `MUSIC TRACKS` are recorded as unused: the
+  fleet's four-note loop is one `sfx()` per march step, not a tracker pattern.
 - The `btnp` entry carries a `DISCREPANCY:` marker per `AGENTS.md` §4.3 — not between
   the docs and the console, but between the console and RAM: `btnp` ignores writes to
   the GAMEPADS region. It is the reason `tools/inputsim.py` supplies its own.
@@ -738,9 +853,18 @@ recorded in `docs/tic80-api.md` **before its first use**.
 
 ## 5. Known bugs
 
-None reproducible as of 2026-08-18. All twenty-eight M1–M6 scenarios in `tools/inputsim.py`
-pass — 148 assertions, six clean runs end to end — and every framebuffer dump matches its
+None reproducible as of 2026-08-18. All thirty-nine M1–M8 scenarios in `tools/inputsim.py`
+pass — 235 assertions, three clean runs end to end — and every framebuffer dump matches its
 milestone's acceptance criteria.
+
+Two limits worth stating rather than filing as bugs. **A sound that is already playing is not
+cut when the game freezes**: a shot fired in the frames before the ship is hit rings on
+through the start of the death pause, because a sound has an envelope and the pause does not
+know about it. Stopping it would mean a `stop_sfx()` per channel in `kill_player()` for a
+difference of a few frames of decay. And **an explosion is not drawn during `WAVE_CLEAR`**:
+the burst from the shot that ends a wave is on screen for the one frame it was fired on, and
+the pause that follows holds the field without it. Drawing it would mean updating it too,
+which is the one thing the transition deliberately does not do (§3, M7).
 
 M3's note here — that the fleet could march off the bottom of the screen because nothing
 could end the game — is closed: the fleet reaching the player's row is now a game over.
@@ -757,6 +881,40 @@ Per `AGENTS.md` §4.5: state the question, implement around it under a clearly s
 assumption, and record the assumption here. Mark answered ones `RESOLVED:` with the
 answer and its source; do not delete them.
 
+- **OPEN: Does any of it actually sound good?** This is the first acceptance criterion in
+  the project that no tool here can close, and it is worth being plain about. Every claim M8
+  makes is about the sound *registers*: the shot sweeps up from 262 Hz over 13 frames, the
+  invader's death falls from 523 with a noise waveform, the ship's falls from 131 over 37,
+  the march sounds C3, A#2, G#2, F#2 one per step, and the saucer alternates 392 and 294 Hz
+  every 8 frames. All of that is measured. Whether the envelopes are the right length,
+  whether the march is too low to hear on a laptop speaker, whether the saucer's siren is
+  iconic or maddening over a four-second crossing — none of it is. Every tunable is one
+  line: the `volume` and `chord` strings are the envelopes, `notes` is the pitch, and `speed`
+  stretches a sound without rewriting it. The one to suspect first is the saucer, because it
+  is the only sound that plays continuously.
+- **OPEN: Is the 12-frame burst and the 48-frame bonus the right length?** Reasoned, not
+  felt. 12 frames is long enough to read as a burst rather than a flicker and short enough
+  to be gone before the next shot can reach the fleet; 48 is the arcade's rough beat for a
+  number that has to be read at a glance. Both are named constants. The burst is the one that
+  interacts with something else: much longer and two kills in quick succession start sharing
+  the pool, which is why there are four slots for a game that can only kill one thing a
+  frame.
+- **OPEN: Should a frozen game cut the sounds already playing?** Recorded under §5 as a
+  limit rather than a bug: a shot fired just before the ship is hit rings on into the death
+  pause, and the last march note of a wave rings into the transition. The arcade froze
+  everything, including the sound. Whether the ring-out reads as a natural decay or as a
+  sound that escaped the freeze is a playing question; the fix is a `stop_sfx()` per channel
+  in `kill_player()`, and the cost is that a death would begin with silence rather than with
+  the shot the player just took.
+- **RESOLVED 2026-08-18: Can sound be built at all, given that the SFX editor cannot be
+  driven and the cart carries no SFX bank?** **Yes, by writing the bank into RAM at boot,
+  the way the sprite sheet already was.** Source: `tic_sample` in the console's `src/tic.h`
+  for the layout, `src/core/sound.c` for the two behaviours no page states (stored volume is
+  15 minus the level; an all-0 or all-15 waveform is noise), and `scratch/sfxtest.lua`,
+  `scratch/sfxtest2.lua` and `scratch/notes.lua` for confirming all of it in-console before
+  a line went into `game.lua`. The question was worth asking because a negative answer would
+  have blocked half of M8: §6 names the SFX editor specifically, and the fallback it warns
+  against — poking sound registers — is not what this does.
 - **RESOLVED 2026-08-18: Do the bunkers and the saucer actually reset at the start of each
   wave?** **Yes, and it is now measured rather than inspected.** M7's `WAVE_CLEAR` gave
   both resets a caller: `reset_wave()` runs `reset_fleet()`, `reset_bunkers()`,

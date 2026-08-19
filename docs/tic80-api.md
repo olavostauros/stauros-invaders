@@ -241,6 +241,50 @@ second console launched afterwards read 10 out of the slot on its first frame.
 
 ---
 
+## Audio
+
+### `sfx`
+
+Read 2026-08-18 from https://github.com/nesbox/TIC-80/wiki/sfx
+
+```lua
+sfx(id, [note=-1], [duration=-1], [channel=0], [volume=15], [speed=0])
+```
+
+- `id` — sound effect 0..63, or **-1 to stop the channel**.
+- `note` — either a number 0..95, or a string like `"C#4"`. As a number it is
+  `12 * octave + semitone`, so 48 is C-4 and 60 is C-5. -1 keeps the sample's own note.
+- `duration` — frames; -1 plays until the sample runs out of envelope.
+- `channel` — 0..3. Four sounds can play at once, one per channel; a second `sfx()` on a
+  channel replaces what was there.
+- `volume` — 0..15, applied on top of the sample's own per-tick envelope.
+- `speed` — -4..3. It stretches or compresses the sample: at 0 one tick lasts one frame,
+  at -1 two frames, and above 0 it skips ticks instead. Anything outside the 3-bit signed
+  range — the default, 8 — means "use the sample's own speed".
+
+Returns nothing. `game.lua` calls it with all six arguments always (L007), which is also
+what makes the stop call read oddly: `sfx(-1, -1, -1, channel, 15, 0)`, because the
+channel cannot be named without the note and duration in front of it.
+
+**Where the sound itself comes from:** `sfx()` plays sample `id` out of the cartridge's
+SFX bank. This cart has no SFX chunk (`pack.py` writes code and nothing else), so the bank
+boots empty and `game.lua` writes it into RAM at boot, the same way it writes its sprite
+sheet — see `docs/tic80-ram.md` for the layout of a sample.
+
+Verified in-console 2026-08-18 by `scratch/sfxtest.lua` and by five scenarios in
+`tools/inputsim.py`: a sample poked into the bank and played with `sfx(0, 60, 10, 0, 15, 0)`
+put 523 Hz on channel 0 with the volume falling 15, 14, 13 … one step a frame, and the
+channel fell silent when the envelope ran out. Two behaviours worth having written down,
+both measured rather than read:
+
+- **The register catches up a frame later.** A sound called for on frame *n* first appears
+  in the sound registers on frame *n + 1*. Every audio assertion in `tools/inputsim.py`
+  is offset by it (L065).
+- **A tick whose stored volume is 15 silences the channel.** The bank stores `15 - level`,
+  so an envelope shorter than 30 ticks ends the sound by itself, whatever `duration` says.
+
+---
+
 ## System
 
 ### `exit`
